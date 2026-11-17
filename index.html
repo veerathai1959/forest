@@ -1,0 +1,3086 @@
+<!DOCTYPE html>
+<!--
+  ForestWatch v2.5 — Radar via Copernicus Browser
+  - เปลี่ยน EO Browser เก่า (ถูกยกเลิก) → Copernicus Browser
+  - เพิ่มปุ่มสำรอง EO Browser
+  - fallback หลายทาง
+-->
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#064e3b" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="ForestWatch" />
+  <title>ForestWatch v3.8 — Satellite Tracker + Auto Change Detection</title>
+
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%23064e3b'/%3E%3Cpath d='M256 100C380 160 380 360 256 420 132 360 132 160 256 100Z' fill='%2310b981'/%3E%3C/svg%3E" />
+  <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%23064e3b'/%3E%3Cpath d='M256 100C380 160 380 360 256 420 132 360 132 160 256 100Z' fill='%2310b981'/%3E%3C/svg%3E" />
+  <link rel="manifest" id="pwaManifest" />
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: {
+        brand: { 950: '#022c22', 900: '#064e3b', 700: '#047857', 600: '#059669', 500: '#10b981', 400: '#34d399' }
+      } } }
+    };
+  </script>
+
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
+  <style>
+    html, body { height: 100%; height: 100dvh; margin: 0; overflow: hidden; }
+    body { overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+    #map { height: 50vh; height: 50dvh; flex: none; width: 100%; z-index: 1; }
+    .safe-top    { padding-top:    max(0.75rem, env(safe-area-inset-top)); }
+    .safe-bottom { padding-bottom: max(1rem,    env(safe-area-inset-bottom)); }
+
+    .compare-container {
+      position: relative; width: 100%; height: 240px;
+      overflow: hidden; border-radius: 0.75rem;
+      user-select: none; -webkit-user-select: none;
+      touch-action: pan-y; cursor: ew-resize;
+      background: #1e293b;
+      box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.3);
+    }
+    .compare-img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: cover; pointer-events: none;
+      user-select: none; -webkit-user-drag: none;
+    }
+    #afterImageWrapper { position: absolute; top: 0; left: 0; width: 50%; height: 100%; overflow: hidden; }
+    #changeOverlay { position: absolute; top: 0; left: 0; height: 100%; pointer-events: none; }
+    #changeOverlay polygon {
+      fill: rgba(239, 68, 68, 0.22);
+      stroke: #ef4444; stroke-width: 0.45;
+      stroke-dasharray: 1.2 0.7; vector-effect: non-scaling-stroke;
+    }
+    #sliderHandle {
+      position: absolute; top: 0; left: 50%;
+      width: 3px; height: 100%; background: #10b981;
+      transform: translateX(-50%); z-index: 20; pointer-events: none;
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.6);
+    }
+    #sliderButton {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px; height: 40px;
+      background: #10b981; color: #fff;
+      border: 2px solid #fff; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,.5);
+      font-size: 16px; cursor: ew-resize;
+      transition: transform .15s ease, background-color .15s ease;
+    }
+    #sliderButton:active { transform: translate(-50%,-50%) scale(.92); background: #059669; }
+    #sliderButton:focus-visible { outline: 3px solid #34d399; outline-offset: 3px; }
+
+    @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+    .skeleton {
+      background: linear-gradient(90deg, #334155 0%, #475569 50%, #334155 100%);
+      background-size: 200% 100%;
+      animation: shimmer 1.4s ease-in-out infinite;
+      border-radius: 0.5rem;
+    }
+    .cycle-nav-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+    .layer-btn { transition: background-color .15s, color .15s, border-color .15s; }
+    .layer-btn-active   { background: #059669; color: #fff; border-color: #059669; }
+    .layer-btn-inactive { background: transparent; color: #94a3b8; border-color: #475569; }
+    .layer-btn-radar-active { background: #2563eb !important; color: #fff !important; border-color: #2563eb !important; }
+
+    .shift-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 9px; padding: 1px 5px; border-radius: 6px;
+      background: rgba(245, 158, 11, 0.18); color: #fbbf24; margin-left: 4px;
+    }
+    .fallback-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 9px; padding: 1px 5px; border-radius: 6px;
+      background: rgba(239, 68, 68, 0.15); color: #fca5a5; margin-left: 4px;
+    }
+    .radar-chip {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 9px; padding: 1px 6px; border-radius: 6px;
+      background: rgba(59, 130, 246, 0.2); color: #93c5fd; margin-left: 4px;
+      font-weight: 600;
+    }
+
+    .form-select, .form-input {
+      width: 100%;
+      background: #334155; color: #fff;
+      border: 1px solid #475569; border-radius: 0.5rem;
+      padding: 0.65rem 0.85rem;
+      font-size: 0.875rem; outline: none;
+      transition: border-color .15s;
+    }
+    .form-select:focus, .form-input:focus { border-color: #10b981; }
+    .form-select:disabled { opacity: 0.5; cursor: not-allowed; }
+    .form-label { font-size: 0.7rem; color: #94a3b8; margin-bottom: 0.35rem; display: block; }
+    .form-section-title {
+      font-size: 0.75rem; font-weight: 600; color: #34d399;
+      margin-top: 0.75rem; margin-bottom: 0.5rem;
+      padding-bottom: 0.25rem;
+      border-bottom: 1px solid rgba(52, 211, 153, 0.2);
+      display: flex; align-items: center; gap: 0.35rem;
+    }
+
+    #hotspotMap {
+      height: 220px; border-radius: 0.5rem; overflow: hidden;
+      z-index: 1; background: #1e293b;
+      box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.3);
+    }
+    .hotspot-marker {
+      display: flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: #ef4444; color: #fff; font-size: 11px; font-weight: 700;
+      border: 2px solid #fff;
+      box-shadow: 0 2px 6px rgba(239, 68, 68, 0.6);
+    }
+    .hotspot-marker.high { background: #ef4444; }
+    .hotspot-marker.nominal { background: #f59e0b; }
+    .hotspot-marker.low { background: #10b981; }
+
+    .help-details {
+      margin-bottom: 0.5rem;
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 0.5rem;
+      border: 1px solid #334155;
+      overflow: hidden;
+    }
+    .help-details summary {
+      padding: 0.55rem 0.75rem;
+      font-size: 0.75rem; font-weight: 600; color: #e2e8f0;
+      cursor: pointer; list-style: none;
+      display: flex; justify-content: space-between; align-items: center;
+      transition: background-color .15s;
+    }
+    .help-details summary:hover { background: rgba(51, 65, 85, 0.4); }
+    .help-details summary::-webkit-details-marker { display: none; }
+    .help-details summary::after {
+      content: "▾"; font-size: 0.65rem; color: #94a3b8;
+      transition: transform 0.2s; margin-left: 0.5rem;
+    }
+    .help-details[open] summary::after { transform: rotate(180deg); }
+    .help-details[open] summary { border-bottom: 1px solid #334155; }
+    .help-list {
+      padding: 0.5rem 0.75rem 0.6rem 1.9rem;
+      font-size: 0.7rem; color: #cbd5e1; line-height: 1.65;
+      list-style: decimal; margin: 0;
+    }
+    .help-list li { margin-bottom: 0.3rem; }
+    .help-list li:last-child { margin-bottom: 0; }
+    .help-list a { color: #60a5fa; text-decoration: underline; }
+    .help-list a:hover { color: #93c5fd; }
+    .help-list b { color: #34d399; font-weight: 600; }
+    .help-list code {
+      background: #1e293b; padding: 0.05rem 0.3rem;
+      border-radius: 0.25rem; font-size: 0.65rem; color: #fbbf24;
+    }
+  </style>
+</head>
+<body class="bg-slate-900 text-white flex flex-col">
+
+  <header class="bg-brand-900 px-3 py-3 flex justify-between items-center shadow-md z-10 safe-top">
+    <div class="min-w-0 flex-1">
+      <h1 id="headerParkName" class="text-sm font-bold text-emerald-100 truncate">อุทยานแห่งชาติเขาใหญ่</h1>
+      <p id="headerSubtitle" class="text-[11px] text-emerald-300 truncate">1,355,000 ไร่ · นครราชสีมา</p>
+    </div>
+    <div class="flex flex-col items-end gap-1 shrink-0 ml-2">
+      <div class="flex items-center gap-1">
+        <button id="btnRadar" type="button" title="Sentinel-1 Radar"
+                class="w-7 h-7 rounded-full bg-emerald-800/60 hover:bg-emerald-800 active:bg-emerald-700 flex items-center justify-center text-xs">🛰</button>
+        <button id="btnHotspot" type="button" title="จุดความร้อน"
+                class="w-7 h-7 rounded-full bg-emerald-800/60 hover:bg-emerald-800 active:bg-emerald-700 flex items-center justify-center text-xs">🔥</button>
+        <button id="btnSettings" type="button" title="ตั้งค่าพื้นที่"
+                class="w-7 h-7 rounded-full bg-emerald-800/60 hover:bg-emerald-800 active:bg-emerald-700 flex items-center justify-center text-xs">⚙️</button>
+        <button id="btnRefresh" type="button" title="รีเฟรชข้อมูลดาวเทียม"
+                class="w-7 h-7 rounded-full bg-emerald-800/60 hover:bg-emerald-800 active:bg-emerald-700 flex items-center justify-center text-xs">🔄</button>
+        <span id="alertBadge" class="bg-red-600 text-xs font-semibold px-2 py-0.5 rounded-full hidden">0</span>
+      </div>
+      <span id="netStatus" class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300">ออนไลน์</span>
+    </div>
+  </header>
+
+  <div id="map"></div>
+
+  <div class="bg-slate-800 flex-1 min-h-0 rounded-t-2xl -mt-4 z-10 p-4 overflow-y-auto overscroll-contain shadow-2xl border-t border-slate-700 safe-bottom">
+    <div class="w-12 h-1.5 bg-slate-600 rounded-full mx-auto mb-3"></div>
+    <div class="flex justify-between items-center mb-2">
+      <h2 class="text-sm font-semibold text-slate-300">จุดเฝ้าระวังในเขตรับผิดชอบ</h2>
+      <span id="listSummary" class="text-[11px] text-slate-500"></span>
+    </div>
+    <div id="alertList" aria-live="polite"></div>
+
+    <button id="btnPwaSetup" type="button"
+            class="w-full mt-3 bg-slate-900/60 hover:bg-slate-900 active:bg-black text-slate-300 text-xs py-2 rounded-lg border border-slate-700 flex items-center justify-center gap-1.5">
+      📲 ติดตั้งเป็น PWA
+    </button>
+  </div>
+
+  <!-- ============ Settings Modal ============ -->
+  <div id="settingsModal" class="hidden fixed inset-0 bg-black/85 z-50 flex items-end justify-center">
+    <div class="bg-slate-800 w-full max-w-lg rounded-t-2xl p-5 border-t border-slate-600 max-h-[90dvh] overflow-y-auto safe-bottom">
+      <div class="flex justify-between items-center mb-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <button id="settingsHomeBtn" type="button" aria-label="กลับหน้าหลัก"
+                  class="w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-base">🏠</button>
+          <h3 class="text-base font-bold text-white truncate">ตั้งค่าพื้นที่</h3>
+        </div>
+        <button type="button" id="closeSettingsBtn" aria-label="ปิด"
+                class="text-slate-400 hover:text-white text-2xl font-bold px-2 leading-none">&times;</button>
+      </div>
+
+      <div class="form-section-title">📍 ตำแหน่งที่ตั้ง</div>
+      <div class="mb-3">
+        <label class="form-label">ภาค</label>
+        <select id="settingsRegion" class="form-select"><option value="">-- เลือกภาค --</option></select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">จังหวัด</label>
+        <select id="settingsProvince" class="form-select" disabled><option value="">-- เลือกจังหวัด --</option></select>
+      </div>
+
+      <div class="form-section-title">🌲 ข้อมูลพื้นที่</div>
+      <div class="mb-3">
+        <label class="form-label">ประเภทพื้นที่</label>
+        <select id="settingsType" class="form-select">
+          <option value="national_park">อุทยานแห่งชาติ</option>
+          <option value="forest_reserve">ป่าสงวนแห่งชาติ</option>
+          <option value="wildlife_sanctuary">เขตรักษาพันธุ์สัตว์ป่า</option>
+          <option value="forest_park">วนอุทยาน</option>
+        </select>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">ชื่อพื้นที่</label>
+        <input id="settingsParkName" type="text" list="parkSuggestions" class="form-input"
+               placeholder="พิมพ์ หรือเลือกจากรายการ" autocomplete="off" />
+        <datalist id="parkSuggestions"></datalist>
+      </div>
+      <button type="button" id="btnAddCustomPark"
+              class="w-full mb-3 bg-slate-700/60 hover:bg-slate-700 active:bg-slate-600 text-emerald-300 text-xs py-2 rounded-lg border border-emerald-500/30 flex items-center justify-center gap-1.5">
+        ➕ เพิ่มพื้นที่ใหม่เข้าระบบ
+      </button>
+      <button type="button" id="btnClearCustomParks"
+              class="w-full mb-3 text-[11px] text-slate-500 hover:text-red-400 py-1">
+        🗑 ล้างรายการพื้นที่ที่เพิ่มเองทั้งหมด
+      </button>
+
+      <div class="mb-3">
+        <label class="form-label">พื้นที่ (ไร่) — อัตโนมัติ</label>
+        <div id="settingsAreaDisplay" class="form-input bg-slate-900/50 border-emerald-500/30 text-emerald-300 font-mono">—</div>
+        <p id="settingsAreaSource" class="text-[10px] text-slate-500 mt-1"></p>
+      </div>
+
+      <div class="form-section-title">📌 พิกัดศูนย์กลาง</div>
+      <div class="bg-slate-900/60 rounded-lg p-3 mb-2">
+        <div class="text-[11px] text-slate-500 mb-1">พิกัดอัตโนมัติจากจังหวัดที่เลือก</div>
+        <div id="settingsCoords" class="text-xs text-emerald-300 font-mono">—</div>
+      </div>
+
+      <div class="form-section-title">📖 วิธีการใช้งาน</div>
+
+      <details class="help-details" open>
+        <summary>🗺 1. การตั้งค่าพื้นที่</summary>
+        <ol class="help-list">
+          <li>เลือก <b>ภาค</b> → <b>จังหวัด</b> → <b>ประเภทพื้นที่</b></li>
+          <li>พิมพ์หรือเลือก <b>ชื่อพื้นที่</b> จากรายการที่แนะนำ</li>
+          <li>พื้นที่ (ไร่) จะถูกเติมให้อัตโนมัติ — ถ้าไม่มีในระบบ กด <b>➕ เพิ่มพื้นที่ใหม่</b></li>
+          <li>ตรวจสอบพิกัดศูนย์กลาง แล้วกด <b>💾 บันทึกการตั้งค่า</b></li>
+        </ol>
+      </details>
+
+      <details class="help-details">
+        <summary>🔍 2. เปรียบเทียบภาพดาวเทียม</summary>
+        <ol class="help-list">
+          <li>แตะที่ <b>จุดเฝ้าระวัง</b> ในรายการด้านล่างแผนที่</li>
+          <li>เลือกเลเยอร์: <b>HLS 30 ม.</b> / <b>VIIRS 375 ม.</b> / <b>🛰 Radar (ทะลุเมฆ)</b></li>
+          <li><b>ลากเส้นกลางจอ</b> (หรือกด ← →) เพื่อเทียบก่อน/หลัง</li>
+          <li>เลือกช่วงเวลา: <b>5 / 15 / 30 / 90 วัน</b></li>
+          <li>ใช้ปุ่ม <b>‹ ›</b> เลื่อนดูรอบก่อนหน้า/ถัดไป</li>
+        </ol>
+      </details>
+
+      <details class="help-details">
+        <summary>🛰 3. Sentinel-1 Radar (ทะลุเมฆ)</summary>
+        <ol class="help-list">
+          <li>กดปุ่ม <b>🛰 Radar</b> ในหน้าแจ้งเตือน → เห็นภาพเรดาร์ <b>ไม่มีเมฆบัง</b> ทันที</li>
+          <li>หรือกด <b>"🌍 Copernicus →"</b> → Compare Slider จะ<b>เปลี่ยนเป็น Radar อัตโนมัติ</b> + เปิด Copernicus Browser พร้อมกัน</li>
+          <li>หรือกดปุ่ม <b>🛰</b> ที่ header เพื่อดูข้อมูล Sentinel-1 ของพื้นที่</li>
+          <li>ภาพเรดาร์: สีเข้ม = น้ำ/ดิน, สีอ่อน = พืช/ป่า, สีสว่าง = สิ่งปลูกสร้าง</li>
+        </ol>
+      </details>
+
+      <details class="help-details">
+        <summary>🔥 4. จุดความร้อน (Hotspot)</summary>
+        <ol class="help-list">
+          <li>กดปุ่ม <b>🔥</b> ที่มุมขวาบน</li>
+          <li>สมัคร MAP_KEY ฟรีที่
+            <a href="https://firms.modaps.eosdis.nasa.gov/api/map_key/" target="_blank" rel="noopener">NASA FIRMS</a></li>
+          <li>วาง key → กด <b>💾</b> บันทึก → เลือกช่วงวัน → กด <b>🔥 โหลด</b></li>
+          <li>สี: 🔴 สูง · 🟠 ปานกลาง · 🟢 ต่ำ (ระดับความมั่นใจ)</li>
+        </ol>
+      </details>
+
+      <details class="help-details">
+        <summary>💾 5. บันทึก & ส่งออกข้อมูล</summary>
+        <ol class="help-list">
+          <li><b>📥 โหลด GeoJSON</b> — บันทึกจุดเป็นไฟล์ GIS</li>
+          <li><b>🧭 นำทาง</b> — เปิด Google/Apple Maps ตามพิกัด</li>
+          <li><b>✅ บันทึกผล</b> — ทำเครื่องหมายว่าตรวจแล้ว</li>
+        </ol>
+      </details>
+
+      <details class="help-details">
+        <summary>📲 6. ติดตั้งเป็น PWA</summary>
+        <ol class="help-list">
+          <li>กดปุ่ม <b>📲 ติดตั้งเป็น PWA</b> ที่หน้าหลัก</li>
+          <li>ดาวน์โหลด <code>sw.js</code> + <code>manifest.json</code></li>
+          <li>วางทั้ง 2 ไฟล์ไว้โฟลเดอร์เดียวกับ HTML</li>
+          <li>เปิดผ่าน local server (เช่น <code>npx serve</code>)</li>
+        </ol>
+      </details>
+
+      <div class="grid grid-cols-2 gap-2.5 mt-4">
+        <button type="button" id="resetSettingsBtn"
+                class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white py-2.5 rounded-lg text-xs font-medium">↺ ค่าเริ่มต้น</button>
+        <button type="button" id="saveSettingsBtn"
+                class="bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-400 text-white py-2.5 rounded-lg text-xs font-bold shadow-lg">💾 บันทึกการตั้งค่า</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Custom Park Modal ============ -->
+  <div id="customParkModal" class="hidden fixed inset-0 bg-black/90 z-[60] flex items-end justify-center">
+    <div class="bg-slate-800 w-full max-w-lg rounded-t-2xl p-5 border-t border-emerald-500/50 max-h-[90dvh] overflow-y-auto safe-bottom">
+      <div class="flex justify-between items-center mb-3">
+        <h3 class="text-base font-bold text-white">➕ เพิ่มพื้นที่ใหม่</h3>
+        <button type="button" id="closeCustomParkBtn" aria-label="ปิด"
+                class="text-slate-400 hover:text-white text-2xl font-bold px-2 leading-none">&times;</button>
+      </div>
+      <p class="text-[11px] text-slate-400 mb-4 leading-relaxed">
+        พื้นที่ที่เพิ่มจะถูกบันทึกไว้ในเครื่องนี้ และใช้ได้ในการค้นหาครั้งต่อไป
+      </p>
+      <div class="space-y-3">
+        <div>
+          <label class="form-label">ชื่อพื้นที่ <span class="text-red-400">*</span></label>
+          <input id="cpName" type="text" class="form-input" placeholder="เช่น ป่าชุมชนบ้าน..." maxlength="80" />
+        </div>
+        <div>
+          <label class="form-label">ประเภท <span class="text-red-400">*</span></label>
+          <select id="cpType" class="form-select">
+            <option value="national_park">อุทยานแห่งชาติ</option>
+            <option value="forest_reserve">ป่าสงวนแห่งชาติ</option>
+            <option value="wildlife_sanctuary">เขตรักษาพันธุ์สัตว์ป่า</option>
+            <option value="forest_park">วนอุทยาน</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div><label class="form-label">ภาค <span class="text-red-400">*</span></label><select id="cpRegion" class="form-select"></select></div>
+          <div><label class="form-label">จังหวัด <span class="text-red-400">*</span></label><select id="cpProvince" class="form-select" disabled></select></div>
+        </div>
+        <div>
+          <label class="form-label">พื้นที่จริง (ไร่) <span class="text-red-400">*</span></label>
+          <input id="cpArea" type="number" min="0" step="0.01" class="form-input" placeholder="เช่น 12500" />
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-2.5 mt-5">
+        <button type="button" id="cancelCustomParkBtn"
+                class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white py-2.5 rounded-lg text-xs font-medium">ยกเลิก</button>
+        <button type="button" id="saveCustomParkBtn"
+                class="bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-400 text-white py-2.5 rounded-lg text-xs font-bold shadow-lg">💾 บันทึกพื้นที่</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ Alert Modal ============ -->
+  <div id="alertModal" class="hidden fixed inset-0 bg-black/85 z-50 flex items-end justify-center">
+    <div class="bg-slate-800 w-full max-w-lg rounded-t-2xl p-5 border-t border-slate-600 max-h-[90dvh] overflow-y-auto safe-bottom">
+      <div class="flex justify-between items-center mb-2">
+        <div class="flex items-center gap-2 min-w-0">
+          <button id="alertHomeBtn" type="button" aria-label="กลับหน้าหลัก"
+                  class="w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-base">🏠</button>
+          <h3 id="modalTitle" class="text-base font-bold text-white truncate">รายละเอียดจุดแจ้งเตือน</h3>
+        </div>
+        <button type="button" id="closeModalBtn" aria-label="ปิด"
+                class="text-slate-400 hover:text-white text-2xl font-bold px-2 leading-none">&times;</button>
+      </div>
+      <p id="modalCoords" class="text-xs text-slate-300 mb-3"></p>
+
+      <!-- ⭐ 3 Layers: HLS / VIIRS / Radar -->
+      <div class="mb-2 flex gap-1.5">
+        <button data-layer="hls" class="layer-btn layer-btn-active flex-1 text-[11px] py-2 rounded-lg border font-semibold">HLS · 30 ม.</button>
+        <button data-layer="viirs" class="layer-btn layer-btn-inactive flex-1 text-[11px] py-2 rounded-lg border font-semibold">VIIRS · 375 ม.</button>
+        <button data-layer="sentinel1" class="layer-btn layer-btn-inactive flex-1 text-[11px] py-2 rounded-lg border font-semibold">🛰 Radar</button>
+      </div>
+      <p id="layerHint" class="text-[10px] text-slate-500 text-center mb-2"></p>
+
+      <div class="mb-2.5 flex items-center justify-between gap-2 bg-slate-900/60 rounded-lg p-2">
+        <button id="prevCycle" type="button" aria-label="รอบก่อนหน้า"
+                class="cycle-nav-btn w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-lg">‹</button>
+        <div class="text-center flex-1 min-w-0">
+          <div id="cycleLabel" class="text-xs font-semibold text-white truncate">กำลังโหลด…</div>
+          <div id="cycleRange" class="text-[10px] text-slate-400">—</div>
+        </div>
+        <button id="nextCycle" type="button" aria-label="รอบถัดไป"
+                class="cycle-nav-btn w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-lg">›</button>
+      </div>
+
+      <div class="mb-3 flex gap-1.5">
+        <button data-days="5"  class="compare-mode-btn flex-1 text-[11px] py-1.5 rounded-md font-medium">5 วัน</button>
+        <button data-days="15" class="compare-mode-btn flex-1 text-[11px] py-1.5 rounded-md font-medium">15 วัน</button>
+        <button data-days="30" class="compare-mode-btn flex-1 text-[11px] py-1.5 rounded-md font-medium">30 วัน</button>
+        <button data-days="90" class="compare-mode-btn flex-1 text-[11px] py-1.5 rounded-md font-medium">90 วัน</button>
+      </div>
+
+      <div class="flex justify-between text-[11px] text-slate-400 mb-1 px-1">
+        <span id="afterDateLabel" class="text-red-400 font-semibold">หลัง</span>
+        <span class="text-slate-500">ก่อน ↔ หลัง</span>
+        <span id="beforeDateLabel" class="text-emerald-400 font-semibold">ก่อน</span>
+      </div>
+
+      <div class="mb-3">
+        <div id="compareBox" class="compare-container">
+          <img id="beforeImg" class="compare-img" draggable="false" alt="" />
+          <div id="afterImageWrapper">
+            <img id="afterImg" class="compare-img" draggable="false" alt="" />
+            <svg id="changeOverlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+              <polygon points="30,38 62,33 68,60 38,66" />
+            </svg>
+          </div>
+          <span class="absolute bottom-2 right-2 z-10 bg-black/70 text-emerald-300 text-[10px] px-2 py-0.5 rounded">ป่าสมบูรณ์</span>
+          <span id="afterLabel" class="absolute bottom-2 left-2 z-10 bg-black/70 text-red-300 text-[10px] px-2 py-0.5 rounded">พื้นที่เฝ้าระวัง</span>
+          <div id="sliderHandle">
+            <div id="sliderButton" role="slider" tabindex="0" aria-label="เปรียบเทียบภาพก่อน-หลัง"
+                 aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">&harr;</div>
+          </div>
+          <div id="imageLoading"
+               class="hidden absolute inset-0 z-30 bg-slate-900/75 backdrop-blur-sm flex flex-col items-center justify-center">
+            <div class="w-9 h-9 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+            <div id="imageLoadingText" class="text-xs text-slate-300">กำลังโหลดภาพดาวเทียม…</div>
+          </div>
+        </div>
+        <p class="text-[11px] text-slate-500 text-center mt-1">ลากเส้นกลางจอ หรือใช้ปุ่มลูกศร ← → เพื่อเปรียบเทียบ</p>
+      </div>
+
+      <div class="mb-3 p-2.5 bg-blue-900/30 border border-blue-500/40 rounded-lg">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="text-[11px] font-bold text-blue-300">🛰 Sentinel-1 Radar</div>
+            <div class="text-[10px] text-slate-400">ทะลุเมฆ · เปลี่ยน Compare เป็น Radar อัตโนมัติ</div>
+          </div>
+          <div class="shrink-0 flex flex-col gap-1">
+            <button id="btnOpenS1" type="button" class="bg-blue-600 hover:bg-blue-500 active:bg-blue-400 text-white text-[10px] font-bold px-2.5 py-1.5 rounded-md">
+              🌍 Copernicus →
+            </button>
+            <button id="btnOpenS1Old" type="button" class="bg-slate-700 hover:bg-slate-600 text-white text-[10px] font-medium px-2.5 py-1 rounded-md">
+              🛰 EO Browser
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-2.5 mb-3">
+        <button type="button" id="btnGeoJSON"
+                class="bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white py-2.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1">
+          📥 โหลด GeoJSON
+        </button>
+        <button type="button" id="btnNavigate"
+                class="bg-blue-600 hover:bg-blue-500 active:bg-blue-400 text-white py-2.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1">
+          🧭 นำทางไปยังพิกัด
+        </button>
+      </div>
+      <button type="button" id="btnSave"
+              class="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-400 text-white py-3 rounded-xl text-sm font-bold shadow-lg">
+        ✅ บันทึกผลการตรวจสอบภาคสนาม
+      </button>
+    </div>
+  </div>
+
+  <!-- ============ Sentinel-1 Radar Modal ============ -->
+  <div id="radarModal" class="hidden fixed inset-0 bg-black/85 z-50 flex items-end justify-center">
+    <div class="bg-slate-800 w-full max-w-lg rounded-t-2xl p-5 border-t border-blue-500/50 max-h-[90dvh] overflow-y-auto safe-bottom">
+      <div class="flex justify-between items-center mb-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <button id="radarHomeBtn" type="button" aria-label="กลับหน้าหลัก"
+                  class="w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-base">🏠</button>
+          <h3 class="text-base font-bold text-white truncate">🛰 Sentinel-1 Radar</h3>
+        </div>
+        <button type="button" id="closeRadarBtn" aria-label="ปิด"
+                class="text-slate-400 hover:text-white text-2xl font-bold px-2 leading-none">&times;</button>
+      </div>
+      <div id="radarContent"></div>
+    </div>
+  </div>
+
+  <!-- ============ Hotspot Modal ============ -->
+  <div id="hotspotModal" class="hidden fixed inset-0 bg-black/85 z-50 flex items-end justify-center">
+    <div class="bg-slate-800 w-full max-w-lg rounded-t-2xl p-5 border-t border-red-500/50 max-h-[90dvh] overflow-y-auto safe-bottom">
+      <div class="flex justify-between items-center mb-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <button id="hotspotHomeBtn" type="button" aria-label="กลับหน้าหลัก"
+                  class="w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-base">🏠</button>
+          <h3 class="text-base font-bold text-white truncate">🔥 จุดความร้อน (Hotspot)</h3>
+        </div>
+        <button type="button" id="closeHotspotBtn" aria-label="ปิด"
+                class="text-slate-400 hover:text-white text-2xl font-bold px-2 leading-none">&times;</button>
+      </div>
+      <div class="mb-3 p-3 bg-red-900/20 border border-red-500/30 rounded-lg">
+        <div class="text-sm font-semibold text-red-300 mb-1">🔥 NASA FIRMS · VIIRS 375 ม.</div>
+        <div class="text-[11px] text-slate-300 leading-relaxed">
+          ตรวจจุดความร้อนด้วยดาวเทียม ทะลุเมฆได้ · ใช้ประเมิน
+          <strong class="text-red-200">ความเสี่ยงไฟป่า</strong> และ
+          <strong class="text-red-200">ฝุ่น PM2.5</strong>
+        </div>
+      </div>
+      <div id="hotspotMap"></div>
+      <div id="hotspotControls" class="mt-3"></div>
+      <div id="hotspotList" class="mt-3"></div>
+      <div class="mt-3 p-2.5 bg-amber-900/20 border border-amber-500/30 rounded-lg text-[10px] text-amber-200 leading-relaxed">
+        ⚠️ ข้อมูล hotspot เป็นการประมาณจากดาวเทียม อาจมี false positive จากโรงงาน/พื้นที่อุตสาหกรรม
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ PWA Setup Modal ============ -->
+  <div id="pwaModal" class="hidden fixed inset-0 bg-black/85 z-50 flex items-end justify-center">
+    <div class="bg-slate-800 w-full max-w-lg rounded-t-2xl p-5 border-t border-slate-600 max-h-[90dvh] overflow-y-auto safe-bottom">
+      <div class="flex justify-between items-center mb-2">
+        <div class="flex items-center gap-2 min-w-0">
+          <button id="pwaHomeBtn" type="button" aria-label="กลับหน้าหลัก"
+                  class="w-9 h-9 shrink-0 rounded-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 flex items-center justify-center text-base">🏠</button>
+          <h3 class="text-base font-bold text-white truncate">ติดตั้งเป็น PWA</h3>
+        </div>
+        <button type="button" id="closePwaBtn" aria-label="ปิด"
+                class="text-slate-400 hover:text-white text-2xl font-bold px-2 leading-none">&times;</button>
+      </div>
+      <p class="text-xs text-slate-400 leading-relaxed mb-4">
+        Chrome กำหนดให้ Service Worker ต้องโหลดจากไฟล์ <code class="bg-slate-900 px-1 rounded">sw.js</code> บนเซิร์ฟเวอร์เท่านั้น
+      </p>
+      <div class="space-y-2 mb-4">
+        <button type="button" id="dlSw" class="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-400 text-white py-2.5 rounded-lg text-sm font-semibold">📥 ดาวน์โหลด sw.js</button>
+        <button type="button" id="dlManifest" class="w-full bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-400 text-white py-2.5 rounded-lg text-sm font-semibold">📥 ดาวน์โหลด manifest.json</button>
+      </div>
+      <details class="bg-slate-900/60 rounded-lg p-3 text-xs text-slate-300">
+        <summary class="cursor-pointer font-semibold text-emerald-300">ขั้นตอนแบบละเอียด</summary>
+        <ol class="list-decimal list-inside mt-2 space-y-1 leading-relaxed">
+          <li>ดาวน์โหลดทั้ง 2 ไฟล์</li>
+          <li>วางไว้โฟลเดอร์เดียวกับ <code>forestwatch.html</code></li>
+          <li>เปิดผ่าน local server เช่น <code>npx serve</code></li>
+          <li>Chrome → ไอคอนติดตั้งที่ address bar</li>
+        </ol>
+      </details>
+    </div>
+  </div>
+
+  <div id="toastContainer"
+       class="fixed left-1/2 -translate-x-1/2 bottom-24 z-[70] flex flex-col items-center gap-2 pointer-events-none"></div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    /* =========================================================
+       CONFIG
+       ========================================================= */
+    const CFG = {
+      cycleDays: 5, maxCycles: 8, probeSize: 32, fullSize: 1024,
+      layers: {
+        hls:   'HLS_S30_Nadir_BRDF_Adjusted_Reflectance',
+        viirs: 'VIIRS_SNPP_CorrectedReflectance_TrueColor'
+      },
+      lagDays:        { hls: 4, viirs: 2 },
+      probeBack:      { hls: 7, viirs: 3 },
+      probeThreshold: { hls: 6, viirs: 8 }
+    };
+    const STORAGE_KEY      = 'forestwatch.verified.v1';
+    const SETTINGS_KEY     = 'forestwatch.settings.v1';
+    const CUSTOM_PARKS_KEY = 'forestwatch.custom_parks.v1';
+    const FIRMS_KEY_STORAGE = 'forestwatch.firms_key.v1';
+    const LOAD_DELAY       = 600;
+    const RADAR_CACHE_TTL  = 30 * 60 * 1000;
+    const RADAR_MAX_ITEMS  = 30;
+    const RADAR_CROP_SIZE  = 768;
+
+    /* =========================================================
+       REGIONS
+       ========================================================= */
+    const REGIONS = {
+      north: { name: 'ภาคเหนือ', provinces: {
+        'เชียงใหม่': { lat: 18.7883, lng: 98.9853 }, 'เชียงราย': { lat: 19.9105, lng: 99.8406 },
+        'ลำปาง': { lat: 18.2888, lng: 99.4909 }, 'แม่ฮ่องสอน': { lat: 19.3020, lng: 97.9654 },
+        'น่าน': { lat: 18.7756, lng: 100.7730 }, 'พะเยา': { lat: 19.1664, lng: 99.9019 },
+        'แพร่': { lat: 18.1445, lng: 100.1403 }, 'ลำพูน': { lat: 18.5745, lng: 99.0087 },
+        'อุตรดิตถ์': { lat: 17.6200, lng: 100.0993 }
+      }},
+      northeast: { name: 'ภาคตะวันออกเฉียงเหนือ', provinces: {
+        'นครราชสีมา': { lat: 14.4215, lng: 101.3721 }, 'ขอนแก่น': { lat: 16.4419, lng: 102.8360 },
+        'อุดรธานี': { lat: 17.4138, lng: 102.7870 }, 'อุบลราชธานี': { lat: 15.2287, lng: 104.8565 },
+        'เลย': { lat: 17.4860, lng: 101.7223 }, 'สกลนคร': { lat: 17.1545, lng: 104.1348 },
+        'นครพนม': { lat: 17.4042, lng: 104.7696 }, 'มุกดาหาร': { lat: 16.5421, lng: 104.7207 },
+        'ร้อยเอ็ด': { lat: 16.0538, lng: 103.6520 }, 'สุรินทร์': { lat: 14.8820, lng: 103.4937 },
+        'บุรีรัมย์': { lat: 14.9930, lng: 103.1029 }, 'ศรีสะเกษ': { lat: 15.1186, lng: 104.3220 },
+        'ชัยภูมิ': { lat: 15.8068, lng: 102.0317 }, 'กาฬสินธุ์': { lat: 16.4314, lng: 103.5059 },
+        'มหาสารคาม': { lat: 16.1848, lng: 103.3007 }, 'ยโสธร': { lat: 15.7922, lng: 104.1450 },
+        'อำนาจเจริญ': { lat: 15.8587, lng: 104.6257 }, 'หนองคาย': { lat: 17.8783, lng: 102.7416 },
+        'หนองบัวลำภู': { lat: 17.2040, lng: 102.4409 }, 'บึงกาฬ': { lat: 18.3609, lng: 103.6466 }
+      }},
+      central: { name: 'ภาคกลาง', provinces: {
+        'กรุงเทพมหานคร': { lat: 13.7563, lng: 100.5018 }, 'นครสวรรค์': { lat: 15.7030, lng: 100.1371 },
+        'กำแพงเพชร': { lat: 16.4827, lng: 99.5226 }, 'พิจิตร': { lat: 16.4429, lng: 100.3488 },
+        'พิษณุโลก': { lat: 16.8211, lng: 100.2659 }, 'เพชรบูรณ์': { lat: 16.4189, lng: 101.1591 },
+        'นครปฐม': { lat: 13.8197, lng: 100.0620 }, 'นนทบุรี': { lat: 13.8591, lng: 100.5217 },
+        'ปทุมธานี': { lat: 14.0208, lng: 100.5250 }, 'พระนครศรีอยุธยา': { lat: 14.3532, lng: 100.5685 },
+        'สมุทรปราการ': { lat: 13.5991, lng: 100.5967 }, 'สมุทรสาคร': { lat: 13.5470, lng: 100.2744 },
+        'สระบุรี': { lat: 14.5289, lng: 100.9101 }, 'สิงห์บุรี': { lat: 14.8936, lng: 100.3967 },
+        'อ่างทอง': { lat: 14.5896, lng: 100.4555 }, 'ลพบุรี': { lat: 14.7995, lng: 100.6534 },
+        'ชัยนาท': { lat: 15.1851, lng: 100.1251 }, 'อุทัยธานี': { lat: 15.3835, lng: 100.0246 },
+        'สุพรรณบุรี': { lat: 14.4745, lng: 100.1177 }
+      }},
+      east: { name: 'ภาคตะวันออก', provinces: {
+        'ฉะเชิงเทรา': { lat: 13.6904, lng: 101.0779 }, 'ชลบุรี': { lat: 13.3611, lng: 100.9847 },
+        'ระยอง': { lat: 12.6814, lng: 101.2816 }, 'จันทบุรี': { lat: 12.6114, lng: 102.1035 },
+        'ตราด': { lat: 12.2428, lng: 102.5175 }, 'ปราจีนบุรี': { lat: 14.0509, lng: 101.3721 },
+        'สระแก้ว': { lat: 13.8240, lng: 102.0646 }, 'นครนายก': { lat: 14.2069, lng: 101.2128 }
+      }},
+      west: { name: 'ภาคตะวันตก', provinces: {
+        'กาญจนบุรี': { lat: 14.0228, lng: 99.5328 }, 'ราชบุรี': { lat: 13.5283, lng: 99.8134 },
+        'เพชรบุรี': { lat: 13.1119, lng: 99.9390 }, 'ประจวบคีรีขันธ์': { lat: 11.8126, lng: 99.7957 },
+        'ตาก': { lat: 16.8785, lng: 99.1258 }
+      }},
+      south: { name: 'ภาคใต้', provinces: {
+        'กระบี่': { lat: 8.0863, lng: 98.9063 }, 'ชุมพร': { lat: 10.4930, lng: 99.1800 },
+        'ตรัง': { lat: 7.5594, lng: 99.6114 }, 'นครศรีธรรมราช': { lat: 8.4304, lng: 99.9631 },
+        'นราธิวาส': { lat: 6.4255, lng: 101.8253 }, 'ปัตตานี': { lat: 6.8692, lng: 101.2500 },
+        'พังงา': { lat: 8.4501, lng: 98.5255 }, 'พัทลุง': { lat: 7.6166, lng: 100.0740 },
+        'ภูเก็ต': { lat: 7.8804, lng: 98.3922 }, 'ยะลา': { lat: 6.5411, lng: 101.2802 },
+        'ระนอง': { lat: 9.9528, lng: 98.6088 }, 'สงขลา': { lat: 7.1897, lng: 100.5953 },
+        'สตูล': { lat: 6.6238, lng: 100.0673 }, 'สุราษฎร์ธานี': { lat: 9.1382, lng: 99.3217 }
+      }}
+    };
+
+    const TYPE_LABELS = {
+      national_park: 'อุทยานแห่งชาติ',
+      forest_reserve: 'ป่าสงวนแห่งชาติ',
+      wildlife_sanctuary: 'เขตรักษาพันธุ์สัตว์ป่า',
+      forest_park: 'วนอุทยาน'
+    };
+
+    const PARK_AREAS = [
+      { type: 'national_park', name: 'เขาใหญ่', provinces: ['นครราชสีมา','สระบุรี','นครนายก','ปราจีนบุรี'], areaRai: 1355000 },
+      { type: 'national_park', name: 'ทับลาน', provinces: ['นครราชสีมา','ปราจีนบุรี'], areaRai: 1397375 },
+      { type: 'national_park', name: 'ปางสีดา', provinces: ['สระแก้ว'], areaRai: 527500 },
+      { type: 'national_park', name: 'ดอยอินทนนท์', provinces: ['เชียงใหม่'], areaRai: 301250 },
+      { type: 'national_park', name: 'ดอยสุเทพ-ปุย', provinces: ['เชียงใหม่'], areaRai: 163125 },
+      { type: 'national_park', name: 'ออบหลวง', provinces: ['เชียงใหม่'], areaRai: 345625 },
+      { type: 'national_park', name: 'ห้วยน้ำดัง', provinces: ['เชียงใหม่','แม่ฮ่องสอน'], areaRai: 779375 },
+      { type: 'national_park', name: 'ดอยหลวง', provinces: ['เชียงราย','พะเยา'], areaRai: 731250 },
+      { type: 'national_park', name: 'ขุนแจ', provinces: ['เชียงราย'], areaRai: 168750 },
+      { type: 'national_park', name: 'ถ้ำหลวง-ขุนน้ำนางนอน', provinces: ['เชียงราย'], areaRai: 31875 },
+      { type: 'national_park', name: 'น้ำหนาว', provinces: ['เพชรบูรณ์'], areaRai: 603750 },
+      { type: 'national_park', name: 'ภูหินร่องกล้า', provinces: ['พิษณุโลก','เลย'], areaRai: 190625 },
+      { type: 'national_park', name: 'ภูกระดึง', provinces: ['เลย'], areaRai: 217500 },
+      { type: 'national_park', name: 'ภูเรือ', provinces: ['เลย'], areaRai: 75625 },
+      { type: 'national_park', name: 'ภูพาน', provinces: ['สกลนคร','กาฬสินธุ์','อุดรธานี'], areaRai: 415625 },
+      { type: 'national_park', name: 'ผาแต้ม', provinces: ['อุบลราชธานี'], areaRai: 212500 },
+      { type: 'national_park', name: 'แก่งกระจาน', provinces: ['เพชรบุรี','ประจวบคีรีขันธ์'], areaRai: 1821250 },
+      { type: 'national_park', name: 'เขาสามร้อยยอด', provinces: ['ประจวบคีรีขันธ์'], areaRai: 61250 },
+      { type: 'national_park', name: 'ไทรโยค', provinces: ['กาญจนบุรี'], areaRai: 620000 },
+      { type: 'national_park', name: 'เอราวัณ', provinces: ['กาญจนบุรี'], areaRai: 343750 },
+      { type: 'national_park', name: 'ทองผาภูมิ', provinces: ['กาญจนบุรี'], areaRai: 770000 },
+      { type: 'national_park', name: 'เขื่อนศรีนครินทร์', provinces: ['กาญจนบุรี'], areaRai: 958125 },
+      { type: 'national_park', name: 'เขาแหลม', provinces: ['กาญจนบุรี'], areaRai: 35625 },
+      { type: 'national_park', name: 'เฉลิมรัตนโกสินทร์', provinces: ['กาญจนบุรี'], areaRai: 37500 },
+      { type: 'national_park', name: 'ศรีสัชนาลัย', provinces: ['สุโขทัย'], areaRai: 134375 },
+      { type: 'national_park', name: 'รามคำแหง', provinces: ['สุโขทัย'], areaRai: 212500 },
+      { type: 'national_park', name: 'น้ำตกพาเจริญ', provinces: ['ตาก'], areaRai: 525000 },
+      { type: 'national_park', name: 'ตากสินมหาราช', provinces: ['ตาก'], areaRai: 92500 },
+      { type: 'national_park', name: 'ลานสาง', provinces: ['ตาก'], areaRai: 65000 },
+      { type: 'national_park', name: 'แม่เงา', provinces: ['แม่ฮ่องสอน'], areaRai: 115000 },
+      { type: 'national_park', name: 'ถ้ำปลา-น้ำตกผาเสื่อ', provinces: ['แม่ฮ่องสอน'], areaRai: 39375 },
+      { type: 'national_park', name: 'สาละวิน', provinces: ['แม่ฮ่องสอน'], areaRai: 721250 },
+      { type: 'national_park', name: 'เขาหลวง', provinces: ['นครศรีธรรมราช'], areaRai: 356250 },
+      { type: 'national_park', name: 'เขาสก', provinces: ['สุราษฎร์ธานี'], areaRai: 461250 },
+      { type: 'national_park', name: 'หมู่เกาะสุรินทร์', provinces: ['พังงา'], areaRai: 84375 },
+      { type: 'national_park', name: 'หมู่เกาะสิมิลัน', provinces: ['พังงา'], areaRai: 87500 },
+      { type: 'national_park', name: 'พุเตย', provinces: ['สุพรรณบุรี'], areaRai: 198750 },
+      { type: 'national_park', name: 'เฉลิมพระเกียรติไทยประจัน', provinces: ['ราชบุรี'], areaRai: 62500 },
+      { type: 'national_park', name: 'ไพศาลี', provinces: ['นครสวรรค์'], areaRai: 72000 },
+      { type: 'national_park', name: 'แม่วงก์', provinces: ['นครสวรรค์','กำแพงเพชร'], areaRai: 557500 },
+      { type: 'wildlife_sanctuary', name: 'ทุ่งใหญ่นเรศวร', provinces: ['กาญจนบุรี','ตาก'], areaRai: 2310575 },
+      { type: 'wildlife_sanctuary', name: 'ห้วยขาแข้ง', provinces: ['อุทัยธานี','ตาก','กาญจนบุรี'], areaRai: 1407868.75 },
+      { type: 'wildlife_sanctuary', name: 'แม่น้ำภาชี', provinces: ['ราชบุรี'], areaRai: 307887.50 },
+      { type: 'wildlife_sanctuary', name: 'ดอยผาเมือง', provinces: ['ลำปาง','ลำพูน'], areaRai: 356250 },
+      { type: 'wildlife_sanctuary', name: 'สลักพระ', provinces: ['กาญจนบุรี'], areaRai: 337500 },
+      { type: 'wildlife_sanctuary', name: 'เขาบรรทัด', provinces: ['ตรัง','สตูล','พัทลุง','สงขลา'], areaRai: 791847 },
+      { type: 'wildlife_sanctuary', name: 'เขาพระยาเดินธง', provinces: ['ลพบุรี'], areaRai: 201250 },
+      { type: 'wildlife_sanctuary', name: 'สลักบาล', provinces: ['กาญจนบุรี'], areaRai: 175000 },
+      { type: 'wildlife_sanctuary', name: 'เขาสอยดาว', provinces: ['จันทบุรี'], areaRai: 46250 },
+      { type: 'wildlife_sanctuary', name: 'ภูเขียว', provinces: ['ชัยภูมิ'], areaRai: 139514.56 },
+      { type: 'wildlife_sanctuary', name: 'ดอยผาช้าง', provinces: ['น่าน'], areaRai: 354371 },
+      { type: 'wildlife_sanctuary', name: 'เวียงลอ', provinces: ['พะเยา'], areaRai: 44722 },
+      { type: 'wildlife_sanctuary', name: 'ถ้ำเจ้าราม', provinces: ['ตาก'], areaRai: 214948 },
+      { type: 'wildlife_sanctuary', name: 'ลำน้ำนานฝั่งขวา', provinces: ['น่าน'], areaRai: 81295 },
+      { type: 'wildlife_sanctuary', name: 'เขานัน', provinces: ['นครศรีธรรมราช'], areaRai: 51437.50 },
+      { type: 'forest_reserve', name: 'ป่าเขาแดง', provinces: ['สงขลา'], areaRai: 153625 },
+      { type: 'forest_reserve', name: 'ป่าควนราสอ', provinces: ['สงขลา'], areaRai: 36325 },
+      { type: 'forest_reserve', name: 'ป่าเทือกเขาโต๊ะเทพ', provinces: ['สงขลา'], areaRai: 105500 },
+      { type: 'forest_reserve', name: 'ป่าเทือกเขาสันกาลาคีรี', provinces: ['สงขลา'], areaRai: 52575 },
+      { type: 'forest_reserve', name: 'ป่าควนพน', provinces: ['สงขลา'], areaRai: 35568.75 },
+      { type: 'forest_reserve', name: 'ป่าเขาขวาง', provinces: ['สงขลา'], areaRai: 8318.75 },
+      { type: 'forest_reserve', name: 'ป่าเขารังเกียจ', provinces: ['สงขลา'], areaRai: 39266 },
+      { type: 'forest_reserve', name: 'ป่าควนดินแดง', provinces: ['สงขลา'], areaRai: 11912.50 },
+      { type: 'forest_reserve', name: 'ป่าควนหินพัง', provinces: ['สงขลา'], areaRai: 2250 },
+      { type: 'forest_reserve', name: 'ป่าแควระบม', provinces: ['ฉะเชิงเทรา'], areaRai: 4198.31 },
+      { type: 'forest_park', name: 'น้ำตกพลิ้ว', provinces: ['จันทบุรี'], areaRai: 3125 },
+      { type: 'forest_park', name: 'ภูฝอยลม', provinces: ['อุดรธานี'], areaRai: 7500 },
+      { type: 'forest_park', name: 'แพะเมืองผี', provinces: ['แพร่'], areaRai: 212 },
+      { type: 'forest_park', name: 'ดอยม่อนแก้ว-ม่อนเด็ง', provinces: ['แพร่'], areaRai: 361 },
+      { type: 'forest_park', name: 'ถ้ำลม-ถ้ำวัง', provinces: ['แพร่'], areaRai: 7341 },
+      { type: 'forest_park', name: 'ผาหลักหมื่น', provinces: ['แพร่'], areaRai: 3903 },
+      { type: 'forest_park', name: 'ร่องคำหลวง', provinces: ['แพร่'], areaRai: 3 }
+    ];
+
+    const TYPE_DEFAULT_AREA = {
+      national_park: 700000, forest_reserve: 500000,
+      wildlife_sanctuary: 800000, forest_park: 30000
+    };
+
+    const DEFAULT_SETTINGS = {
+      region: 'northeast', province: 'นครราชสีมา',
+      type: 'national_park', parkName: 'เขาใหญ่',
+      areaRai: 1355000, center: { lat: 14.4215, lng: 101.3721 }
+    };
+
+    const REF_CENTER = { lat: 14.4215, lng: 101.3721 };
+    const ALERT_TEMPLATES = [
+      { id: 'ALT-2026-089', shortId: 'ALT-089', dlat: 0, dlng: 0,
+        area: 'รอคำนวณ', ndvi: 'ยังไม่ตรวจ', severity: 'high', color: '#ef4444', label: 'จุดตรวจ A' },
+      { id: 'ALT-2026-088', shortId: 'ALT-088',
+        dlat: 14.3890 - REF_CENTER.lat, dlng: 101.4102 - REF_CENTER.lng,
+        area: 'รอคำนวณ', ndvi: 'ยังไม่ตรวจ', severity: 'medium', color: '#f59e0b', label: 'จุดตรวจ B' }
+    ];
+
+    const MONTHS_TH = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+    const isoDate = d => d.toISOString().slice(0, 10);
+    function formatTH(iso) { const [y,m,d]=iso.split('-'); return `${+d} ${MONTHS_TH[+m-1]} ${+y+543}`; }
+    const formatNum = n => (typeof n === 'number' ? n.toLocaleString('th-TH') : String(n));
+    function cycleRange(offset, compareDays, layer) {
+      const lag = CFG.lagDays[layer] || 2;
+      const afterDate = new Date();
+      afterDate.setUTCDate(afterDate.getUTCDate() - lag - offset * CFG.cycleDays);
+      const beforeDate = new Date(afterDate);
+      beforeDate.setUTCDate(afterDate.getUTCDate() - compareDays);
+      return { after: isoDate(afterDate), before: isoDate(beforeDate) };
+    }
+
+    function gibsUrl({ bbox, date, size = CFG.fullSize, layer = 'hls' }) {
+      const [w, s, e, n] = bbox;
+      const q = new URLSearchParams({
+        SERVICE: 'WMS', REQUEST: 'GetMap', VERSION: '1.1.1',
+        LAYERS: CFG.layers[layer], STYLES: '', SRS: 'EPSG:4326',
+        BBOX: `${w},${s},${e},${n}`, WIDTH: size, HEIGHT: size,
+        FORMAT: 'image/jpeg', TRANSPARENT: 'FALSE', TIME: date
+      });
+      return 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?' + q;
+    }
+
+    async function probeImage(bbox, date, layer) {
+      return new Promise(resolve => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          try {
+            const c = document.createElement('canvas');
+            c.width = c.height = CFG.probeSize;
+            const ctx = c.getContext('2d');
+            ctx.drawImage(img, 0, 0, CFG.probeSize, CFG.probeSize);
+            const d = ctx.getImageData(0, 0, CFG.probeSize, CFG.probeSize).data;
+            let sum = 0;
+            for (let i = 0; i < d.length; i += 4) sum += (d[i]+d[i+1]+d[i+2])/3;
+            const avg = sum / (CFG.probeSize * CFG.probeSize);
+            resolve({ ok: avg > CFG.probeThreshold[layer], date, brightness: avg });
+          } catch (_) { resolve({ ok: true, date, brightness: null }); }
+        };
+        img.onerror = () => resolve({ ok: false, date, brightness: null });
+        img.src = gibsUrl({ bbox, date, size: CFG.probeSize, layer });
+      });
+    }
+
+    async function findBestDate(bbox, targetIso, layer) {
+      const base = new Date(targetIso + 'T00:00:00Z');
+      const limit = CFG.probeBack[layer];
+      for (let i = 0; i <= limit; i++) {
+        const d = new Date(base); d.setUTCDate(base.getUTCDate() - i);
+        const iso = isoDate(d);
+        const r = await probeImage(bbox, iso, layer);
+        if (r.ok) return { date: iso, shifted: i, layer };
+      }
+      return { date: targetIso, shifted: -1, layer };
+    }
+
+    async function findBestDateHybrid(bbox, targetIso) {
+      const hls = await findBestDate(bbox, targetIso, 'hls');
+      if (hls.shifted >= 0) return { ...hls, fallback: false };
+      const viirs = await findBestDate(bbox, targetIso, 'viirs');
+      return { ...viirs, fallback: true };
+    }
+
+    function loadFullImage(imgEl, url) {
+      return new Promise(resolve => {
+        if (!url) { resolve(false); return; }
+        const timer = setTimeout(() => { imgEl.src = ''; resolve(false); }, 20000);
+        imgEl.onload  = () => { clearTimeout(timer); resolve(true); };
+        imgEl.onerror = () => { clearTimeout(timer); diag('ภาพโหลดไม่ได้: ' + String(url).slice(0, 110)); resolve(false); };
+        imgEl.src = url;
+      });
+    }
+
+    function loadSettings() {
+      try {
+        const raw = localStorage.getItem(SETTINGS_KEY);
+        if (raw) { const p = JSON.parse(raw); if (p && p.parkName) return p; }
+      } catch (_) {}
+      return { ...DEFAULT_SETTINGS };
+    }
+    function saveSettings(s) { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }
+    function clearSettings() {
+      localStorage.removeItem(SETTINGS_KEY);
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    function loadCustomParks() {
+      try { const raw = localStorage.getItem(CUSTOM_PARKS_KEY); if (!raw) return [];
+        const a = JSON.parse(raw); return Array.isArray(a) ? a : [];
+      } catch (_) { return []; }
+    }
+    function saveCustomParks(parks) { localStorage.setItem(CUSTOM_PARKS_KEY, JSON.stringify(parks)); }
+    function getAllParks() { return [...PARK_AREAS, ...loadCustomParks()]; }
+
+    function computeAlerts(center) { return []; }   // จุดเฝ้าระวังมาจากการสแกนกริดจริงเท่านั้น
+    function applyVerifiedStatus(alerts) {
+      let v = [];
+      try { v = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); } catch (_) {}
+      const s = new Set(v);
+      return alerts.map(a => ({ ...a, status: s.has(a.id) ? 'verified' : 'new' }));
+    }
+    function persistVerified() {
+      const ids = alerts.filter(a => a.status === 'verified').map(a => a.id);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+    }
+
+    let currentSettings = loadSettings();
+    let alerts          = applyVerifiedStatus(computeAlerts(currentSettings.center));
+    let currentAlert    = null;
+    let currentOffset   = 0;
+    let currentCompareDays = 5;
+    let currentLayer    = 'hls';
+    let currentLoadToken = 0;
+    let lastResolvedLayer = null;
+    let resetPending    = false;
+    let formAreaRai     = currentSettings.areaRai || DEFAULT_SETTINGS.areaRai;
+    let formAreaSource  = 'default';
+
+    const countNew = () => alerts.filter(a => a.status === 'new').length;
+    const getAlertById = (id) => alerts.find(a => a.id === id);
+
+    let firmsKey = localStorage.getItem(FIRMS_KEY_STORAGE) || '';
+    let hotspots = [];
+    let hotspotLoading = false;
+    let hotspotError = '';
+    let hotspotDays = 2;
+    let hotspotModalMap = null;
+    let hotspotModalLayerGroup = null;
+
+    let radarAvailability = {
+      status: 'idle',
+      date: null, daysAgo: null, count: 0,
+      message: '', range: 90
+    };
+    let radarCheckToken = 0;
+    const radarItemsCache = {};
+
+    /* =========================================================
+       ⭐ URL helpers (v2.5 — Copernicus Browser)
+       ========================================================= */
+    function getCopernicusBrowserUrl(lat, lng, opts) {
+      opts = opts || {};
+      var collection = opts.collection || 'sentinel-1';
+      var days = opts.days || 90;
+      var preset = opts.preset || 'vv';
+      var to = new Date();
+      var from = new Date(Date.now() - days * 864e5);
+      var f = function(d){ return d.toISOString().slice(0,19) + 'Z'; };
+      return 'https://browser.dataspace.copernicus.eu/'
+           + '?zoom=15&lat=' + lat + '&lng=' + lng
+           + '&datasetId=' + encodeURIComponent(({ 'sentinel-1': 'S1_CDAS_IW_VVVH', 'sentinel-2-l2a': 'S2_L2A_CDAS' })[collection] || collection)
+           + '&fromTime=' + encodeURIComponent(f(from))
+           + '&toTime=' + encodeURIComponent(f(to))
+           + '&preset=' + encodeURIComponent(preset);
+    }
+    function getSentinel1Url(lat, lng, days, polarization, specificDate) {
+      days = days || 90;
+      polarization = polarization || 'VV';
+      var datasetId = 'S1_AWS_IW_VVVH';
+      var layers = polarization === 'VH' ? 'VH' : 'VV';
+      var fromDate, toDate;
+      if (specificDate) {
+        var acqDate = new Date(specificDate + 'T00:00:00Z');
+        var from = new Date(acqDate); from.setUTCDate(from.getUTCDate() - 1);
+        var to = new Date(acqDate);   to.setUTCDate(to.getUTCDate() + 1);
+        fromDate = from.toISOString().slice(0, 10) + 'T00:00:00.000Z';
+        toDate   = to.toISOString().slice(0, 10)   + 'T23:59:59.999Z';
+      } else {
+        var t = new Date();
+        var fr = new Date(Date.now() - days * 864e5);
+        fromDate = fr.toISOString().slice(0, 10) + 'T00:00:00.000Z';
+        toDate   = t.toISOString().slice(0, 10)   + 'T23:59:59.999Z';
+      }
+      return 'https://apps.sentinel-hub.com/eo-browser/?zoom=15'
+           + '&lat=' + lat + '&lng=' + lng
+           + '&themeId=DEFAULT-THEME'
+           + '&datasetId=' + datasetId
+           + '&fromTime=' + fromDate
+           + '&toTime=' + toDate
+           + '&layers=' + layers;
+    }
+    function getSentinel2Url(lat, lng, days) {
+      return getCopernicusBrowserUrl(lat, lng, { collection: 'sentinel-2-l2a', days: days || 30, preset: 'true-color' });
+    }
+
+    async function checkSentinel1Availability(lat, lng, days = 90) {
+      const token = ++radarCheckToken;
+      radarAvailability.status = 'loading';
+      radarAvailability.range = days;
+      radarAvailability.message = '';
+      renderRadarContent();
+
+      const endDate = new Date();
+      const startDate = new Date(Date.now() - days * 864e5);
+      const body = {
+        collections: ["sentinel-1-grd"],
+        intersects: { type: "Point", coordinates: [lng, lat] },
+        datetime: `${startDate.toISOString()}/${endDate.toISOString()}`,
+        limit: 20
+      };
+
+      try {
+        const res = await fetch('https://catalogue.dataspace.copernicus.eu/stac/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        if (token !== radarCheckToken) return;
+
+        if (!data.features || data.features.length === 0) {
+          radarAvailability.status = 'notfound';
+          radarAvailability.date = null;
+          radarAvailability.daysAgo = null;
+          radarAvailability.count = 0;
+          radarAvailability.message = `ไม่พบข้อมูล Sentinel-1 ในช่วง ${days} วันที่ผ่านมา`;
+        } else {
+          const sorted = [...data.features].sort((a, b) => {
+            const da = new Date(a.properties.datetime || a.properties.created || 0);
+            const db = new Date(b.properties.datetime || b.properties.created || 0);
+            return db - da;
+          });
+          const nearest = sorted[0];
+          const acqStr = nearest.properties.datetime || nearest.properties.created;
+          const acqDate = new Date(acqStr);
+          const daysAgo = Math.max(0, Math.floor((Date.now() - acqDate) / 864e5));
+          radarAvailability.status = 'found';
+          radarAvailability.date = acqDate.toISOString().slice(0, 10);
+          radarAvailability.daysAgo = daysAgo;
+          radarAvailability.count = data.features.length;
+          radarAvailability.message = '';
+        }
+      } catch (err) {
+        console.error('[STAC]', err);
+        if (token !== radarCheckToken) return;
+        radarAvailability.status = 'error';
+        radarAvailability.date = null;
+        radarAvailability.daysAgo = null;
+        radarAvailability.count = 0;
+        radarAvailability.message = `ไม่สามารถตรวจสอบได้ (${err.message})`;
+      }
+      renderRadarContent();
+    }
+
+    function daysAgoText(n) {
+      if (n == null) return '';
+      if (n === 0) return 'วันนี้';
+      if (n === 1) return 'เมื่อวาน';
+      return `${n} วันก่อน`;
+    }
+
+    function updateHeader() {
+      const { type, parkName, areaRai, province } = currentSettings;
+      const label = TYPE_LABELS[type] || TYPE_LABELS.national_park;
+      document.getElementById('headerParkName').textContent = `${label}${parkName}`;
+      document.getElementById('headerSubtitle').textContent = `${formatNum(areaRai)} ไร่ · ${province}`;
+    }
+
+    const map = L.map('map').setView([currentSettings.center.lat, currentSettings.center.lng], 12);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      { attribution: 'Tiles &copy; Esri · ภาพพื้นหลังเป็นภาพเก่า ไม่ใช่ภาพล่าสุด', maxZoom: 19 }).addTo(map);
+
+    const layerByAlertId = new Map();
+
+    function clearMapLayers() {
+      layerByAlertId.forEach(layer => map.removeLayer(layer));
+      layerByAlertId.clear();
+    }
+
+    function buildMapLayers() {
+      alerts.forEach(a => {
+        const v = a.status === 'verified';
+        if (a.isFire) {
+          const m = L.circleMarker([a.lat, a.lng], { radius: 10, weight: 3, color: v ? '#10b981' : a.color, fillColor: v ? '#10b981' : a.color, fillOpacity: 0.45 });
+          m.addTo(map).bindTooltip(`🔥 #${a.shortId} · ${a.ndvi}`, { direction: 'top' });
+          m.on('click', () => openAlertModal(a.id)); layerByAlertId.set(a.id, m); return;
+        }
+        const mk = (ll, c) => {
+          const un = c && c.status === 'unconfirmed';
+          return L.polygon(ll, { color: v ? '#10b981' : (un ? '#f59e0b' : a.color), weight: 2,
+            fillColor: v ? '#10b981' : (un ? '#f59e0b' : a.color), fillOpacity: v ? 0.2 : 0.35, dashArray: v ? '5 5' : (un ? '4 4' : null) });
+        };
+        const g = L.featureGroup();
+        if (a.clusters && a.clusters.length) a.clusters.forEach(c => g.addLayer(mk(c.ll, c)));
+        else { const d = 0.0018; g.addLayer(mk([[a.lat + d, a.lng - d], [a.lat + d, a.lng + d], [a.lat - d, a.lng + d], [a.lat - d, a.lng - d]])); }
+        g.addTo(map).bindTooltip(`#${a.shortId} · ${a.area}`, { direction: 'top', sticky: true });
+        g.on('click', () => openAlertModal(a.id));
+        layerByAlertId.set(a.id, g);
+      });
+    }
+
+    function refreshPolygonStyle(a) {
+      const layer = layerByAlertId.get(a.id);
+      if (!layer) return;
+      const v = a.status === 'verified';
+      layer.setStyle({
+        color: v ? '#10b981' : a.color, fillColor: v ? '#10b981' : a.color,
+        fillOpacity: v ? 0.2 : 0.35, dashArray: v ? '5 5' : null
+      });
+    }
+
+    const listEl    = document.getElementById('alertList');
+    const badgeEl   = document.getElementById('alertBadge');
+    const summaryEl = document.getElementById('listSummary');
+
+    function renderSkeleton() {
+      listEl.innerHTML = '';
+      for (let i = 0; i < 2; i++) {
+        const div = document.createElement('div');
+        div.className = 'bg-slate-700/60 p-3 rounded-xl mb-2.5';
+        div.innerHTML = `<div class="skeleton h-3.5 w-28 mb-2"></div>
+          <div class="skeleton h-3 w-44 mb-1.5"></div>
+          <div class="skeleton h-2.5 w-32"></div>`;
+        listEl.appendChild(div);
+      }
+      summaryEl.textContent = 'กำลังโหลด…';
+      badgeEl.classList.add('hidden');
+    }
+
+    function renderAllVerified() {
+      listEl.innerHTML = `<div class="flex flex-col items-center justify-center py-10 text-center">
+        <div class="w-16 h-16 rounded-full bg-emerald-500/15 flex items-center justify-center mb-3">
+          <svg viewBox="0 0 24 24" class="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 12l2 2 4-4M12 3l7 4v6c0 4-3 7-7 8-4-1-7-4-7-8V7l7-4z" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <p class="text-sm font-semibold text-slate-200">ตรวจสอบครบทุกจุดแล้ว</p>
+        <p class="text-xs text-slate-400 mt-1">ไม่มีการแจ้งเตือนคงค้าง</p>
+      </div>`;
+    }
+
+    function renderList() {
+      listEl.innerHTML = '';
+      if (alerts.length === 0 && gridState.running) {
+        listEl.innerHTML = `<div class="flex flex-col items-center justify-center py-10 text-center">
+          <div class="w-10 h-10 border-4 border-emerald-400 border-t-transparent rounded-full animate-spin mb-3"></div>
+          <p class="text-sm font-semibold text-slate-200">กำลังสแกน ${gridState.done}/${gridState.total} ช่อง…</p>
+          <p class="text-xs text-slate-400 mt-1">ดึงภาพ Sentinel-2 ล่าสุดและตัดเมฆ/เงาอัตโนมัติ</p></div>`;
+        summaryEl.textContent = 'กำลังสแกน'; badgeEl.classList.add('hidden'); return;
+      }
+      if (alerts.length === 0) {
+        listEl.innerHTML = `<div class="flex flex-col items-center justify-center py-10 text-center">
+          <div class="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center mb-3">
+            <svg viewBox="0 0 24 24" class="w-8 h-8 text-emerald-400" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <p class="text-sm font-semibold text-slate-200">ไม่พบจุดเฝ้าระวัง</p>
+          <p class="text-xs text-slate-400 mt-1">ไม่พบการเปลี่ยนแปลงใน ${gridState.total} ช่องที่สแกน (ยังไม่ครอบคลุมทั้งอุทยาน)</p>
+        </div>`;
+        summaryEl.textContent = '0 จุด'; badgeEl.classList.add('hidden'); return;
+      }
+
+      if (countNew() === 0) { renderAllVerified(); }
+      else {
+        const sorted = [...alerts].sort((a, b) => (a.status !== b.status ? (a.status === 'new' ? -1 : 1) : ({ critical: 0, high: 1, medium: 2, low: 3 }[a.severity] - { critical: 0, high: 1, medium: 2, low: 3 }[b.severity])));
+        sorted.forEach(a => {
+          const v = a.status === 'verified';
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'w-full text-left p-3 rounded-xl mb-2.5 border-l-4 flex justify-between items-center gap-2 transition-all active:scale-[0.98] ' +
+            (v ? 'bg-slate-800/60 border-emerald-500/60 opacity-75' : 'bg-slate-700/80 hover:bg-slate-700 active:bg-slate-600');
+          btn.style.borderLeftColor = v ? '#10b981' : a.color;
+          btn.innerHTML = `<div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-bold text-sm ${v ? 'text-slate-400' : 'text-white'}">${a.isFire ? '🔥 ' : ''}จุดที่ #${a.shortId}</span>
+              ${v
+                ? '<span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded flex items-center gap-1">✓ ตรวจสอบแล้ว</span>'
+                : `<span class="text-[10px] px-2 py-0.5 rounded" style="background:${a.color}22;color:${a.color}">${a.ndvi}</span>`}
+            </div>
+            <p class="text-xs ${v ? 'text-slate-500' : 'text-slate-400'} mt-1 truncate">
+              พิกัด: ${a.lat.toFixed(4)}, ${a.lng.toFixed(4)} • ${a.isFire ? a.area : 'พื้นที่ ~' + a.area}
+            </p>
+          </div>
+          <span class="text-xs font-medium whitespace-nowrap ${v ? 'text-slate-500' : 'text-emerald-400'}">
+            ${v ? 'ดูอีกครั้ง' : 'เปรียบเทียบ →'}
+          </span>`;
+          btn.addEventListener('click', () => openAlertModal(a.id));
+          listEl.appendChild(btn);
+        });
+      }
+
+      const total = alerts.length;
+      const verified = alerts.filter(a => a.status === 'verified').length;
+      summaryEl.textContent = `${verified}/${total} ตรวจสอบแล้ว`;
+      const n = countNew();
+      if (n > 0) { badgeEl.textContent = String(n); badgeEl.classList.remove('hidden'); }
+      else { badgeEl.classList.add('hidden'); }
+    }
+
+    function toast(msg, type = 'ok') {
+      const el = document.createElement('div');
+      el.textContent = msg;
+      el.className = 'text-white text-sm px-4 py-2.5 rounded-full shadow-lg transition-opacity duration-300 ' +
+        (type === 'ok' ? 'bg-emerald-600' : 'bg-red-600');
+      document.getElementById('toastContainer').appendChild(el);
+      setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 2200);
+    }
+
+    const settingsModal    = document.getElementById('settingsModal');
+    const settingsRegion   = document.getElementById('settingsRegion');
+    const settingsProvince = document.getElementById('settingsProvince');
+    const settingsType     = document.getElementById('settingsType');
+    const settingsParkName = document.getElementById('settingsParkName');
+    const settingsCoords   = document.getElementById('settingsCoords');
+
+    function populateRegions() {
+      settingsRegion.innerHTML = '<option value="">-- เลือกภาค --</option>';
+      Object.entries(REGIONS).forEach(([k, r]) => {
+        const o = document.createElement('option'); o.value = k; o.textContent = r.name;
+        settingsRegion.appendChild(o);
+      });
+    }
+    function populateProvinces(regionKey, selected) {
+      settingsProvince.innerHTML = '';
+      if (!regionKey || !REGIONS[regionKey]) {
+        settingsProvince.innerHTML = '<option value="">-- เลือกจังหวัด --</option>';
+        settingsProvince.disabled = true; return;
+      }
+      settingsProvince.disabled = false;
+      settingsProvince.innerHTML = '<option value="">-- เลือกจังหวัด --</option>';
+      Object.keys(REGIONS[regionKey].provinces).forEach(n => {
+        const o = document.createElement('option'); o.value = n; o.textContent = n;
+        if (n === selected) o.selected = true;
+        settingsProvince.appendChild(o);
+      });
+    }
+    function updateCoordsDisplay() {
+      const r = settingsRegion.value, p = settingsProvince.value;
+      const c = r && p && REGIONS[r]?.provinces[p];
+      settingsCoords.textContent = c ? `${c.lat.toFixed(4)}, ${c.lng.toFixed(4)}` : '—';
+    }
+
+    function normalizeName(s) { return (s || '').trim().toLowerCase().replace(/\s+/g, ''); }
+
+    function findParkArea(province, name, type) {
+      const n = normalizeName(name);
+      if (!n) return null;
+      const all = getAllParks();
+      const exact = all.filter(p =>
+        normalizeName(p.name) === n && p.provinces.includes(province) && (!type || p.type === type));
+      if (exact.length) return exact[0];
+      const byName = all.filter(p => normalizeName(p.name) === n);
+      return byName.length ? byName[0] : null;
+    }
+
+    function populateParkSuggestions(province, type) {
+      const dl = document.getElementById('parkSuggestions');
+      dl.innerHTML = '';
+      const all = getAllParks();
+      let list = all.filter(p => (!province || p.provinces.includes(province)) && (!type || p.type === type));
+      if (!list.length) list = all.filter(p => !province || p.provinces.includes(province));
+      if (!list.length) list = all;
+      list.forEach(p => { const o = document.createElement('option'); o.value = p.name; dl.appendChild(o); });
+    }
+
+    function updateAreaDisplay() {
+      document.getElementById('settingsAreaDisplay').textContent = formAreaRai.toLocaleString('th-TH');
+      const s = document.getElementById('settingsAreaSource');
+      if (formAreaSource === 'lookup') s.innerHTML = '<span class="text-emerald-400">✓ พื้นที่จากฐานข้อมูล</span>';
+      else if (formAreaSource === 'type-default') s.innerHTML = '<span class="text-amber-400">≈ ประมาณการตามประเภท</span>';
+      else s.innerHTML = '<span class="text-slate-500">ใช้ค่าเดิม</span>';
+    }
+
+    function autoFillArea() {
+      const province = settingsProvince.value;
+      const name = settingsParkName.value.trim();
+      const type = settingsType.value || 'national_park';
+      const hit = findParkArea(province, name, type);
+      if (hit) {
+        formAreaRai = hit.areaRai;
+        formAreaSource = 'lookup';
+        if (hit.type !== type) settingsType.value = hit.type;
+        updateAreaDisplay();
+        return;
+      }
+      formAreaRai = TYPE_DEFAULT_AREA[type] || 500000;
+      formAreaSource = 'type-default';
+      updateAreaDisplay();
+    }
+
+    function openSettings() {
+      populateRegions();
+      settingsRegion.value = currentSettings.region || '';
+      populateProvinces(currentSettings.region, currentSettings.province);
+      settingsType.value = currentSettings.type || 'national_park';
+      settingsParkName.value = currentSettings.parkName || '';
+      formAreaRai = currentSettings.areaRai || DEFAULT_SETTINGS.areaRai;
+      formAreaSource = 'default';
+      populateParkSuggestions(settingsProvince.value, settingsType.value);
+      updateAreaDisplay();
+      updateCoordsDisplay();
+      settingsModal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeSettings() {
+      settingsModal.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    settingsRegion.addEventListener('change', () => {
+      populateProvinces(settingsRegion.value);
+      populateParkSuggestions(settingsProvince.value, settingsType.value);
+      updateCoordsDisplay();
+      autoFillArea();
+    });
+    settingsProvince.addEventListener('change', () => {
+      populateParkSuggestions(settingsProvince.value, settingsType.value);
+      updateCoordsDisplay();
+      autoFillArea();
+    });
+    settingsParkName.addEventListener('input', autoFillArea);
+    settingsParkName.addEventListener('change', autoFillArea);
+    settingsType.addEventListener('change', () => {
+      populateParkSuggestions(settingsProvince.value, settingsType.value);
+      autoFillArea();
+    });
+
+    function saveSettingsFromForm() {
+      const region = settingsRegion.value;
+      const province = settingsProvince.value;
+      const type = settingsType.value || 'national_park';
+      const parkName = settingsParkName.value.trim();
+      if (!region) { toast('กรุณาเลือกภาค', 'err'); return; }
+      if (!province) { toast('กรุณาเลือกจังหวัด', 'err'); return; }
+      if (!parkName) { toast('กรุณากรอกชื่อพื้นที่', 'err'); return; }
+      const coord = REGIONS[region]?.provinces[province];
+      if (!coord) { toast('ไม่พบพิกัดจังหวัด', 'err'); return; }
+
+      const newSettings = {
+        region, province, type, parkName,
+        areaRai: formAreaRai,
+        center: { lat: coord.lat, lng: coord.lng }
+      };
+      const parkChanged =
+        newSettings.parkName !== currentSettings.parkName ||
+        newSettings.province !== currentSettings.province ||
+        newSettings.region   !== currentSettings.region;
+      saveSettings(newSettings);
+      currentSettings = newSettings;
+      if (parkChanged) {
+        localStorage.removeItem(STORAGE_KEY);
+        Object.keys(radarItemsCache).forEach(k => delete radarItemsCache[k]);
+      }
+      applySettingsToProgram();
+      toast(`บันทึก: ${TYPE_LABELS[type]}${parkName} (${formAreaRai.toLocaleString('th-TH')} ไร่)`);
+      closeSettings();
+    }
+
+    function applySettingsToProgram() {
+      updateHeader();
+      alerts = applyVerifiedStatus(computeAlerts(currentSettings.center));
+      clearMapLayers();
+      buildMapLayers();
+      map.flyTo([currentSettings.center.lat, currentSettings.center.lng], 12, { duration: 1.2 });
+      renderList();
+      resetBoundary(); runAllDetection(); autoLoadFire();
+    }
+
+    document.getElementById('saveSettingsBtn').addEventListener('click', saveSettingsFromForm);
+    document.getElementById('resetSettingsBtn').addEventListener('click', () => {
+      if (!resetPending) {
+        resetPending = true;
+        toast('กดอีกครั้งเพื่อยืนยันรีเซ็ต');
+        setTimeout(() => { resetPending = false; }, 3000);
+        return;
+      }
+      resetPending = false;
+      clearSettings();
+      Object.keys(radarItemsCache).forEach(k => delete radarItemsCache[k]);
+      currentSettings = { ...DEFAULT_SETTINGS };
+      applySettingsToProgram();
+      closeSettings();
+      toast('รีเซ็ตเป็นค่าเริ่มต้นแล้ว');
+    });
+    document.getElementById('btnSettings').addEventListener('click', openSettings);
+    document.getElementById('closeSettingsBtn').addEventListener('click', closeSettings);
+    document.getElementById('settingsHomeBtn').addEventListener('click', closeSettings);
+    settingsModal.addEventListener('click', e => { if (e.target === settingsModal) closeSettings(); });
+
+    const customParkModal = document.getElementById('customParkModal');
+    const cpName = document.getElementById('cpName');
+    const cpType = document.getElementById('cpType');
+    const cpRegion = document.getElementById('cpRegion');
+    const cpProvince = document.getElementById('cpProvince');
+    const cpArea = document.getElementById('cpArea');
+
+    function populateCpRegions() {
+      cpRegion.innerHTML = '<option value="">-- เลือกภาค --</option>';
+      Object.entries(REGIONS).forEach(([k, r]) => {
+        const o = document.createElement('option'); o.value = k; o.textContent = r.name;
+        cpRegion.appendChild(o);
+      });
+    }
+    function populateCpProvinces(regionKey) {
+      cpProvince.innerHTML = '';
+      if (!regionKey || !REGIONS[regionKey]) {
+        cpProvince.innerHTML = '<option value="">-- เลือกจังหวัด --</option>';
+        cpProvince.disabled = true; return;
+      }
+      cpProvince.disabled = false;
+      cpProvince.innerHTML = '<option value="">-- เลือกจังหวัด --</option>';
+      Object.keys(REGIONS[regionKey].provinces).forEach(n => {
+        const o = document.createElement('option'); o.value = n; o.textContent = n;
+        cpProvince.appendChild(o);
+      });
+    }
+    cpRegion.addEventListener('change', () => populateCpProvinces(cpRegion.value));
+
+    function openCustomParkModal() {
+      populateCpRegions();
+      cpName.value = ''; cpType.value = 'national_park';
+      cpProvince.innerHTML = '<option value="">-- เลือกจังหวัด --</option>';
+      cpProvince.disabled = true;
+      cpArea.value = '';
+      customParkModal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+    }
+    function closeCustomParkModal() {
+      customParkModal.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+
+    function saveCustomPark() {
+      const name = cpName.value.trim();
+      const type = cpType.value;
+      const region = cpRegion.value;
+      const province = cpProvince.value;
+      const areaRai = parseFloat(cpArea.value);
+      if (!name) { toast('กรุณากรอกชื่อพื้นที่', 'err'); return; }
+      if (!region) { toast('กรุณาเลือกภาค', 'err'); return; }
+      if (!province) { toast('กรุณาเลือกจังหวัด', 'err'); return; }
+      if (!areaRai || areaRai <= 0) { toast('กรุณากรอกพื้นที่จริง', 'err'); return; }
+      const dup = getAllParks().some(p =>
+        normalizeName(p.name) === normalizeName(name) && p.provinces.includes(province));
+      if (dup) { toast('มีพื้นที่นี้อยู่แล้วในจังหวัดนี้', 'err'); return; }
+
+      const custom = loadCustomParks();
+      custom.push({ type, name, provinces: [province], areaRai, isCustom: true, createdAt: new Date().toISOString() });
+      saveCustomParks(custom);
+      closeCustomParkModal();
+
+      settingsParkName.value = name;
+      settingsType.value = type;
+      settingsRegion.value = region;
+      populateProvinces(region, province);
+      populateParkSuggestions(province, type);
+      autoFillArea();
+      updateCoordsDisplay();
+      toast(`เพิ่ม "${name}" (${areaRai.toLocaleString('th-TH')} ไร่) แล้ว`);
+    }
+
+    document.getElementById('btnAddCustomPark').addEventListener('click', openCustomParkModal);
+    document.getElementById('closeCustomParkBtn').addEventListener('click', closeCustomParkModal);
+    document.getElementById('cancelCustomParkBtn').addEventListener('click', closeCustomParkModal);
+    document.getElementById('saveCustomParkBtn').addEventListener('click', saveCustomPark);
+    customParkModal.addEventListener('click', e => { if (e.target === customParkModal) closeCustomParkModal(); });
+
+    document.getElementById('btnClearCustomParks').addEventListener('click', () => {
+      const c = loadCustomParks();
+      if (c.length === 0) { toast('ไม่มีพื้นที่ที่เพิ่มเอง', 'err'); return; }
+      if (!window.confirm(`ลบพื้นที่ที่เพิ่มเองทั้ง ${c.length} รายการ?`)) return;
+      localStorage.removeItem(CUSTOM_PARKS_KEY);
+      populateParkSuggestions(settingsProvince.value, settingsType.value);
+      toast('ล้างรายการพื้นที่ที่เพิ่มเองแล้ว');
+    });
+
+    const modal           = document.getElementById('alertModal');
+    const modalTitle      = document.getElementById('modalTitle');
+    const modalCoords     = document.getElementById('modalCoords');
+    const beforeImg       = document.getElementById('beforeImg');
+    const afterImg        = document.getElementById('afterImg');
+    const beforeDateLabel = document.getElementById('beforeDateLabel');
+    const afterDateLabel  = document.getElementById('afterDateLabel');
+    const afterLabel      = document.getElementById('afterLabel');
+    const cycleLabel      = document.getElementById('cycleLabel');
+    const cycleRangeEl    = document.getElementById('cycleRange');
+    const prevCycleBtn    = document.getElementById('prevCycle');
+    const nextCycleBtn    = document.getElementById('nextCycle');
+    const imageLoading    = document.getElementById('imageLoading');
+    const imageLoadingTxt = document.getElementById('imageLoadingText');
+    const layerHint       = document.getElementById('layerHint');
+    const compareModeBtns = document.querySelectorAll('.compare-mode-btn');
+    const layerBtns       = document.querySelectorAll('.layer-btn');
+
+    function setImageLoading(on, text) {
+      if (text) imageLoadingTxt.textContent = text;
+      imageLoading.classList.toggle('hidden', !on);
+    }
+    function updateLayerButtons(a) {
+      layerBtns.forEach(b => {
+        const on = b.dataset.layer === a;
+        b.classList.toggle('layer-btn-active', on && a !== 'sentinel1');
+        b.classList.toggle('layer-btn-radar-active', on && a === 'sentinel1');
+        b.classList.toggle('layer-btn-inactive', !on);
+      });
+    }
+    function updateCycleUI(offset, compareDays, afterBest, beforeBest, resolvedLayer) {
+      cycleLabel.textContent = offset === 0 ? 'รอบล่าสุด' : `ย้อนหลัง ${offset * CFG.cycleDays} วัน`;
+      cycleRangeEl.textContent = `${formatTH(beforeBest.date)} — ${formatTH(afterBest.date)}`;
+      const aS = afterBest.shifted > 0 ? ` <span class="shift-chip">⚠ เลื่อน ${afterBest.shifted} วัน</span>` : '';
+      const bS = beforeBest.shifted > 0 ? ` <span class="shift-chip">⚠ เลื่อน ${beforeBest.shifted} วัน</span>` : '';
+      const fN = (afterBest.fallback || beforeBest.fallback)
+        ? ` <span class="fallback-chip">HLS ไม่มีภาพ → ใช้ VIIRS</span>` : '';
+      afterDateLabel.innerHTML = `หลัง: ${formatTH(afterBest.date)}${aS}${fN}`;
+      beforeDateLabel.innerHTML = `ก่อน: ${formatTH(beforeBest.date)}${bS}`;
+      prevCycleBtn.disabled = offset >= CFG.maxCycles - 1;
+      nextCycleBtn.disabled = offset <= 0;
+      compareModeBtns.forEach(b => {
+        const on = +b.dataset.days === compareDays;
+        b.classList.toggle('bg-emerald-600', on);
+        b.classList.toggle('text-white', on);
+        b.classList.toggle('bg-slate-700', !on);
+        b.classList.toggle('text-slate-300', !on);
+      });
+      const ln = resolvedLayer === 'hls' ? 'HLS (30 ม.)' : 'VIIRS (375 ม.)';
+      const fb = afterBest.fallback || beforeBest.fallback;
+      layerHint.innerHTML = fb
+        ? `<span class="text-amber-400">⚠ ใช้ ${ln} แทน (HLS ไม่มีภาพปลอดเมฆ 7 วัน)</span>`
+        : `<span class="text-slate-500">แสดงภาพ ${ln}${resolvedLayer === 'hls' ? ' — ละเอียด 12.5 เท่า' : ''}</span>`;
+      updateLayerButtons(fb ? 'viirs' : resolvedLayer);
+    }
+
+    async function fetchS1Items(bbox, spanDays = 90) {
+      const [w, s, e, n] = bbox;
+      const cx = (w + e) / 2;
+      const cy = (s + n) / 2;
+      const cacheKey = `${cx.toFixed(3)},${cy.toFixed(3)},${spanDays}`;
+      const cached = radarItemsCache[cacheKey];
+      if (cached && Date.now() - cached.ts < RADAR_CACHE_TTL) return cached.items;
+
+      const start = new Date(Date.now() - spanDays * 864e5);
+      const body = {
+        collections: ['sentinel-1-rtc'],
+        intersects: { type: 'Point', coordinates: [cx, cy] },
+        datetime: `${start.toISOString()}/${new Date().toISOString()}`,
+        limit: RADAR_MAX_ITEMS,
+        sortby: [{ field: 'datetime', direction: 'desc' }]
+      };
+      const res = await fetch('https://planetarycomputer.microsoft.com/api/stac/v1/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error(`STAC HTTP ${res.status}`);
+      const data = await res.json();
+      const items = data.features || [];
+      radarItemsCache[cacheKey] = { items, ts: Date.now() };
+      return items;
+    }
+
+    // ⭐ ใช้ rendered_preview ที่ signed แล้ว
+    function pcPreviewUrl(item, bbox) {
+      if (!item) return null;
+      const preview = (item.assets && item.assets.rendered_preview && item.assets.rendered_preview.href)
+                   || (item.properties && item.properties.rendered_preview)
+                   || (item.assets && item.assets.thumbnail && item.assets.thumbnail.href);
+      if (preview) {
+        try {
+          const u = new URL(preview);
+          const [w, s, e, n] = bbox;
+          u.searchParams.set('bbox', `${w},${s},${e},${n}`);
+          u.searchParams.set('width', RADAR_CROP_SIZE);
+          u.searchParams.set('height', RADAR_CROP_SIZE);
+          return u.toString();
+        } catch (_) {
+          return preview;
+        }
+      }
+      if (item.assets && item.assets.tilejson && item.assets.tilejson.href) {
+        return item.assets.tilejson.href;
+      }
+      return null;
+    }
+
+    async function loadRadarComparison(alert, offset, compareDays) {
+      const token = ++currentLoadToken;
+      setImageLoading(true, 'กำลังค้นหาภาพเรดาร์ Sentinel-1…');
+
+      cycleLabel.textContent = `🛰 Radar · กำลังโหลด…`;
+      cycleRangeEl.textContent = '—';
+      layerHint.innerHTML = `<span class="text-blue-400">🛰 ภาพเรดาร์ Sentinel-1 (VV) — ทะลุเมฆ</span>`;
+      prevCycleBtn.disabled = offset >= CFG.maxCycles - 1;
+      nextCycleBtn.disabled = offset <= 0;
+      compareModeBtns.forEach(b => {
+        const on = +b.dataset.days === compareDays;
+        b.classList.toggle('bg-emerald-600', on);
+        b.classList.toggle('text-white', on);
+        b.classList.toggle('bg-slate-700', !on);
+        b.classList.toggle('text-slate-300', !on);
+      });
+
+      try {
+        const spanDays = Math.max(compareDays + offset * CFG.cycleDays + 60, 90);
+        const items = await fetchS1Items(alert.bbox, spanDays);
+        if (token !== currentLoadToken) return;
+
+        if (!items.length) {
+          setImageLoading(false);
+          cycleLabel.textContent = 'ไม่พบข้อมูลเรดาร์';
+          cycleRangeEl.textContent = '—';
+          layerHint.innerHTML = `
+            <span class="text-amber-400">⚠ ไม่พบภาพ Sentinel-1</span>
+            <button id="radarFallbackEO" class="mt-2 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">🌍 เปิด Copernicus Browser</button>`;
+          const fb = document.getElementById('radarFallbackEO');
+          if (fb) {
+            fb.addEventListener('click', () => {
+              const url = getCopernicusBrowserUrl(alert.lat, alert.lng, { collection: 'sentinel-1', days: 365, preset: 'vv' });
+              openExternal(url);
+            });
+          }
+          return;
+        }
+
+        const sorted = [...items].sort((a, b) => {
+          const da = new Date(a.properties.datetime || a.properties.created || 0);
+          const db = new Date(b.properties.datetime || b.properties.created || 0);
+          return db - da;
+        });
+
+        const cutoff = Date.now() - offset * CFG.cycleDays * 864e5;
+        const afterItem = sorted.find(it => new Date(it.properties.datetime).getTime() <= cutoff) || sorted[0];
+        const afterDate = new Date(afterItem.properties.datetime);
+        const orbit = afterItem.properties['sat:orbit_state'];
+        const pool = sorted.filter(it => it !== afterItem && new Date(it.properties.datetime) < afterDate
+                                      && (!orbit || it.properties['sat:orbit_state'] === orbit));
+        const targetBeforeMs = afterDate.getTime() - compareDays * 864e5;
+        let beforeItem = pool[0] || afterItem;
+        let bestDiff = Infinity;
+        for (const it of pool) {
+          const diff = Math.abs(new Date(it.properties.datetime).getTime() - targetBeforeMs);
+          if (diff < bestDiff) { bestDiff = diff; beforeItem = it; }
+        }
+        if (!pool.length) toast('มีภาพเรดาร์ไม่พอสำหรับเทียบ (วงโคจรเดียวกัน)', 'err');
+
+        const beforeUrl = pcPreviewUrl(beforeItem, alert.bbox);
+        const afterUrl  = pcPreviewUrl(afterItem, alert.bbox);
+
+        if (!beforeUrl || !afterUrl) {
+          setImageLoading(false);
+          cycleLabel.textContent = 'ไม่พบภาพตัวอย่างเรดาร์';
+          cycleRangeEl.textContent = '—';
+          layerHint.innerHTML = `
+            <span class="text-amber-400">⚠ STAC item ไม่มี rendered_preview</span>
+            <button id="radarFallbackEO2" class="mt-2 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">🌍 เปิด Copernicus Browser</button>`;
+          const fb2 = document.getElementById('radarFallbackEO2');
+          if (fb2) {
+            fb2.addEventListener('click', () => {
+              const url = getCopernicusBrowserUrl(alert.lat, alert.lng, { collection: 'sentinel-1', days: 365, preset: 'vv' });
+              openExternal(url);
+            });
+          }
+          return;
+        }
+
+        setImageLoading(true, 'กำลังโหลดภาพเรดาร์…');
+        const [bOk, aOk] = await Promise.all([
+          loadFullImage(beforeImg, beforeUrl),
+          loadFullImage(afterImg, afterUrl)
+        ]);
+        if (token !== currentLoadToken) return;
+
+        const beforeIso = new Date(beforeItem.properties.datetime).toISOString().slice(0, 10);
+        const afterIso  = new Date(afterItem.properties.datetime).toISOString().slice(0, 10);
+        const beforeDaysAgo = Math.max(0, Math.floor((Date.now() - new Date(beforeItem.properties.datetime).getTime()) / 864e5));
+        const afterDaysAgo  = Math.max(0, Math.floor((Date.now() - new Date(afterItem.properties.datetime).getTime()) / 864e5));
+
+        cycleLabel.textContent = `🛰 Radar · ${offset === 0 ? 'ล่าสุด' : `ย้อนหลัง ${offset * CFG.cycleDays} วัน`}`;
+        cycleRangeEl.textContent = `${formatTH(beforeIso)} — ${formatTH(afterIso)}`;
+        beforeDateLabel.innerHTML = `ก่อน: ${formatTH(beforeIso)} <span class="radar-chip">${beforeDaysAgo} วันก่อน</span>`;
+        afterDateLabel.innerHTML  = `หลัง: ${formatTH(afterIso)} <span class="radar-chip">${afterDaysAgo} วันก่อน</span>`;
+        layerHint.innerHTML = `<span class="text-blue-400">🛰 เรดาร์ Sentinel-1 (VV) — ทะลุเมฆ ไม่มีเมฆบัง</span>`;
+        afterLabel.textContent = 'พื้นที่เฝ้าระวัง (Radar)';
+        lastResolvedLayer = 'sentinel1';
+        updateLayerButtons('sentinel1');
+
+        if (!aOk || !bOk) toast('โหลดภาพเรดาร์บางส่วนไม่สำเร็จ', 'err');
+        setImageLoading(false);
+        requestAnimationFrame(syncImageWidth);
+      } catch (err) {
+        console.error('[Radar]', err);
+        if (token !== currentLoadToken) return;
+        setImageLoading(false);
+        cycleLabel.textContent = 'โหลดเรดาร์ไม่สำเร็จ';
+        layerHint.innerHTML = `
+          <span class="text-red-400">⚠ ${err.message}</span>
+          <button id="radarFallbackEO3" class="mt-2 w-full bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 rounded-lg font-bold">🌍 เปิด Copernicus Browser</button>`;
+        const fb3 = document.getElementById('radarFallbackEO3');
+        if (fb3) {
+          fb3.addEventListener('click', () => {
+            const url = getCopernicusBrowserUrl(currentAlert.lat, currentAlert.lng, { collection: 'sentinel-1', days: 365, preset: 'vv' });
+            openExternal(url);
+          });
+        }
+        toast(`โหลดเรดาร์ไม่สำเร็จ: ${err.message}`, 'err');
+      }
+    }
+
+    async function loadComparison(alert, offset, compareDays, requestedLayer) {
+      if (viewMode === 's2') return rescanS2(alert);
+      if (requestedLayer === 'sentinel1') {
+        return loadRadarComparison(alert, offset, compareDays);
+      }
+
+      const token = ++currentLoadToken;
+      setImageLoading(true, 'กำลังค้นหาภาพที่ดีที่สุด…');
+      const range = cycleRange(offset, compareDays, requestedLayer);
+      let afterBest, beforeBest;
+
+      if (requestedLayer === 'hls') {
+        [afterBest, beforeBest] = await Promise.all([
+          findBestDateHybrid(alert.bbox, range.after),
+          findBestDateHybrid(alert.bbox, range.before)
+        ]);
+      } else {
+        [afterBest, beforeBest] = await Promise.all([
+          findBestDate(alert.bbox, range.after, 'viirs'),
+          findBestDate(alert.bbox, range.before, 'viirs')
+        ]);
+        afterBest.fallback = beforeBest.fallback = false;
+      }
+      if (token !== currentLoadToken) return;
+
+      const isFallback = afterBest.fallback || beforeBest.fallback;
+      const resolvedLayer = isFallback ? 'viirs' : requestedLayer;
+
+      if (isFallback && requestedLayer === 'hls') {
+        if (!afterBest.fallback) afterBest = await findBestDate(alert.bbox, range.after, 'viirs');
+        if (!beforeBest.fallback) beforeBest = await findBestDate(alert.bbox, range.before, 'viirs');
+        afterBest.fallback = beforeBest.fallback = true;
+      }
+      if (token !== currentLoadToken) return;
+
+      lastResolvedLayer = resolvedLayer;
+      setImageLoading(true, 'กำลังโหลดภาพดาวเทียม…');
+
+      const [bOk, aOk] = await Promise.all([
+        loadFullImage(beforeImg, gibsUrl({ bbox: alert.bbox, date: beforeBest.date, layer: resolvedLayer })),
+        loadFullImage(afterImg, gibsUrl({ bbox: alert.bbox, date: afterBest.date, layer: resolvedLayer }))
+      ]);
+      if (token !== currentLoadToken) return;
+      updateCycleUI(offset, compareDays, afterBest, beforeBest, resolvedLayer);
+      if (!aOk || !bOk) toast('ไม่สามารถโหลดภาพบางส่วนได้', 'err');
+      afterLabel.textContent = currentAlert ? currentAlert.label : 'พื้นที่เฝ้าระวัง';
+      setImageLoading(false);
+      requestAnimationFrame(syncImageWidth);
+    }
+
+    /* ===== REAL CHANGE DETECTION — GRID SCAN (Sentinel-2 L2A + ยืนยันด้วย Sentinel-1) ===== */
+    const PC = 'https://planetarycomputer.microsoft.com/api';
+    const S2N = 448;
+    const DET = { minRai: 3, minDrop: 0.4, nbMin: 0.55, naMax: 0.35, screenN: 256, fullN: 448, cell: 0.04, conc: 5, sceneCloud: 70, minClear: 0.6 };
+    const BAD = new Set([0, 1, 2, 3, 7, 8, 9, 10, 11]);   // nodata, อิ่มตัว, มืด/เงาภูมิประเทศ, เงาเมฆ, ไม่จัดประเภท, เมฆ, cirrus, หิมะ
+    const s2Cache = {};
+    let scanGen = 0, lastScanTs = 0, viewMode = 'gibs';
+    const gridState = { running: false, done: 0, total: 0, found: 0, bad: 0, lastErr: '' };
+    let gridMode = 'full', parkPoly = null, lastExtent = null, boundaryPromise = null;
+    const boundaryState = { status: 'pending', note: '' };
+    try { const v = localStorage.getItem('forestwatch.gridsize.v1'); if (v === 'full') gridMode = 'full'; else if ([3, 5, 7, 9].includes(+v)) gridMode = +v; } catch (_) {}
+
+    function s2Crop(item, bbox, assets, extra, n) {
+      n = n || S2N; const [w, s, e, nn] = bbox;
+      const a = assets.map(x => 'assets=' + x).join('&');
+      return `${PC}/data/v1/item/bbox/${w},${s},${e},${nn}/${n}x${n}.png?collection=sentinel-2-l2a&item=${item.id}&${a}&nodata=0&format=png${extra || ''}`;
+    }
+    async function fetchBlob(url, tag) {
+      let r;
+      try { r = await fetch(url); } catch (e) { throw new Error(tag + ': เชื่อมต่อไม่ได้/ถูกบล็อก (' + e.message + ')'); }
+      if (!r.ok) { let t = ''; try { t = (await r.text()).slice(0, 160); } catch (_) {} throw new Error(`${tag}: HTTP ${r.status} ${t}`); }
+      return r.blob();
+    }
+    async function loadPixels(url, tag, n) {
+      n = n || S2N;
+      const bmp = await createImageBitmap(await fetchBlob(url, tag || 'band'));
+      const c = document.createElement('canvas'); c.width = c.height = n;
+      const x = c.getContext('2d'); x.drawImage(bmp, 0, 0, n, n);
+      return x.getImageData(0, 0, n, n).data;
+    }
+    async function s2Items(bbox, days) {
+      const cx = (bbox[0] + bbox[2]) / 2, cy = (bbox[1] + bbox[3]) / 2;
+      const r = await fetch(PC + '/stac/v1/search', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          collections: ['sentinel-2-l2a'], limit: 40,
+          intersects: { type: 'Point', coordinates: [cx, cy] },
+          datetime: new Date(Date.now() - days * 864e5).toISOString() + '/' + new Date().toISOString(),
+          query: { 'eo:cloud_cover': { lt: DET.sceneCloud } },
+          sortby: [{ field: 'datetime', direction: 'desc' }]
+        })
+      });
+      if (!r.ok) throw new Error('STAC HTTP ' + r.status);
+      return (await r.json()).features || [];
+    }
+    function s2ItemsCached(bbox, days) {
+      const k = ((bbox[0] + bbox[2]) / 2).toFixed(3) + ',' + ((bbox[1] + bbox[3]) / 2).toFixed(3) + ',' + days;
+      const c = s2Cache[k];
+      if (c && Date.now() - c.ts < RADAR_CACHE_TTL) return c.p;
+      const p = s2Items(bbox, days); s2Cache[k] = { ts: Date.now(), p };
+      p.catch(() => { delete s2Cache[k]; });
+      return p;
+    }
+    function pxRai(bbox, n) {
+      const lat = (bbox[1] + bbox[3]) / 2;
+      const mW = (bbox[2] - bbox[0]) * 111320 * Math.cos(lat * Math.PI / 180) / n;
+      const mH = (bbox[3] - bbox[1]) * 110540 / n;
+      return mW * mH / 1600;
+    }
+    const clearCache = new Map();
+    function clearFrac(item, bbox) {   // สัดส่วนพิกเซลที่ไม่ใช่เมฆ/เงา/ไม่มีข้อมูล เหนือช่องนี้ (SCL ความละเอียดต่ำ)
+      const k = item.id + '|' + bbox[0].toFixed(3) + ',' + bbox[1].toFixed(3);
+      if (clearCache.has(k)) return clearCache.get(k);
+      const p = (async () => {
+        const n = 48, px = await loadPixels(s2Crop(item, bbox, ['SCL'], '&asset_bidx=SCL|1&rescale=0,255&return_mask=false', n), 'SCL-ตรวจเมฆ', n);
+        let good = 0; for (let i = 0; i < n * n; i++) if (!BAD.has(px[i * 4])) good++;
+        return good / (n * n);
+      })();
+      clearCache.set(k, p); p.catch(() => clearCache.delete(k)); return p;
+    }
+    async function getBands(item, bbox, n, tag) {
+      const b = k => s2Crop(item, bbox, [k], `&asset_bidx=${k}|1&rescale=0,10000&return_mask=false`, n);
+      const sc = s2Crop(item, bbox, ['SCL'], '&asset_bidx=SCL|1&rescale=0,255&return_mask=false', n);
+      const [R, N, S] = await Promise.all([loadPixels(b('B04'), 'B04-' + tag, n), loadPixels(b('B08'), 'B08-' + tag, n), loadPixels(sc, 'SCL-' + tag, n)]);
+      return { R, N, S };
+    }
+    function changeMask(B, A, n) {
+      const raw = new Uint8Array(n * n), dv = new Float32Array(n * n); let valid = 0;
+      for (let i = 0; i < n * n; i++) {
+        const k = i * 4;
+        if (BAD.has(B.S[k]) || BAD.has(A.S[k])) continue;
+        valid++;
+        const sb = B.N[k] + B.R[k], sa = A.N[k] + A.R[k];
+        if (!sb || !sa) continue;
+        const nb = (B.N[k] - B.R[k]) / sb, na = (A.N[k] - A.R[k]) / sa;
+        if (nb > DET.nbMin && na < DET.naMax && nb - na >= DET.minDrop) { raw[i] = 1; dv[i] = nb - na; }
+      }
+      return { raw, dv, valid };
+    }
+    function findClusters(raw, dv, n, minPx) {
+      const seen = new Uint8Array(n * n), out = [], stack = [];
+      for (let s0 = 0; s0 < n * n; s0++) {
+        if (!raw[s0] || seen[s0]) continue;
+        const pix = []; stack.push(s0); seen[s0] = 1;
+        while (stack.length) {
+          const i = stack.pop(); pix.push(i);
+          const x = i % n, y = (i / n) | 0;
+          for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy; if (yy < 0 || yy >= n) continue;
+            for (let dx = -1; dx <= 1; dx++) {
+              const xx = x + dx; if (xx < 0 || xx >= n) continue;
+              const j = yy * n + xx;
+              if (raw[j] && !seen[j]) { seen[j] = 1; stack.push(j); }
+            }
+          }
+        }
+        if (pix.length >= minPx) {
+          let sx = 0, sy = 0, sd = 0;
+          for (const i of pix) { sx += i % n; sy += (i / n) | 0; sd += dv[i]; }
+          out.push({ pix, cx: sx / pix.length, cy: sy / pix.length, drop: sd / pix.length });
+        }
+      }
+      return out;
+    }
+    function hullOf(pix, n) {
+      const pts = [];
+      for (const i of pix) { const x = i % n, y = (i / n) | 0; pts.push([x, y], [x + 1, y], [x, y + 1], [x + 1, y + 1]); }
+      pts.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+      const cr = (o, p, q) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+      const lo = [], up = [];
+      for (const p of pts) { while (lo.length >= 2 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+      for (let i = pts.length - 1; i >= 0; i--) { const p = pts[i]; while (up.length >= 2 && cr(up[up.length - 2], up[up.length - 1], p) <= 0) up.pop(); up.push(p); }
+      up.pop(); lo.pop(); return lo.concat(up);
+    }
+    function decorate(list, status, bbox, n) {
+      const pr = pxRai(bbox, n);
+      list.forEach(c => {
+        c.status = status; c.rai = c.pix.length * pr;
+        c.ll = hullOf(c.pix, n).map(([x, y]) => [bbox[3] - (y / n) * (bbox[3] - bbox[1]), bbox[0] + (x / n) * (bbox[2] - bbox[0])]);
+        c.lat = bbox[3] - (c.cy / n) * (bbox[3] - bbox[1]); c.lng = bbox[0] + (c.cx / n) * (bbox[2] - bbox[0]);
+      });
+      return list;
+    }
+    async function radarCheck(bbox, confirmed, n) {
+      const items = await fetchS1Items(bbox, 150);
+      if (items.length < 2) return null;
+      const T = it => new Date(it.properties.datetime).getTime();
+      const sorted = [...items].sort((x, y) => T(y) - T(x));
+      const after = sorted[0], orb = after.properties['sat:relative_orbit'];
+      const before = sorted.find(it => it !== after && it.properties['sat:relative_orbit'] === orb && T(after) - T(it) >= 10 * 864e5 && T(after) - T(it) <= 60 * 864e5);
+      if (!before) return null;
+      const R = 256, [w, s, e, nn] = bbox;
+      const crop = it => loadPixels(`${PC}/data/v1/item/bbox/${w},${s},${e},${nn}/${R}x${R}.png?collection=sentinel-1-rtc&item=${it.id}&assets=vv&asset_bidx=vv|1&rescale=0,0.5&return_mask=false`, 'S1', R);
+      const [pb, pa] = await Promise.all([crop(before), crop(after)]);
+      const inM = new Uint8Array(R * R);
+      for (const c of confirmed) for (const i of c.pix) { const x = Math.min(R - 1, ((i % n) * R / n) | 0), y = Math.min(R - 1, (((i / n) | 0) * R / n) | 0); inM[y * R + x] = 1; }
+      let bi = 0, ai = 0, ni = 0, bo = 0, ao = 0, no = 0;
+      for (let i = 0; i < R * R; i++) {
+        const k = i * 4, vb = pb[k], va = pa[k]; if (!vb || !va) continue;
+        if (inM[i]) { bi += vb; ai += va; ni++; } else { bo += vb; ao += va; no++; }
+      }
+      if (ni < 8 || no < 100) return null;
+      const dB = 10 * Math.log10((ai / bi) / (ao / bo));
+      return { dB, agree: dB <= -1, bi: before.properties.datetime.slice(0, 10), ai: after.properties.datetime.slice(0, 10) };
+    }
+
+    /* ---- วิเคราะห์ 1 พื้นที่ (ช่องกริดหรือจุดเฝ้าระวัง) ---- */
+    async function analyzeAlert(a, gen) {
+      a.scan = 'running'; a.ndvi = 'กำลังสแกน…'; a.flagged = false;
+      const bbox = a.bbox, T = it => new Date(it.properties.datetime).getTime();
+      try {
+        const items = await s2ItemsCached(bbox, Math.max(currentCompareDays, 5) + 120);
+        if (items.length < 2) throw new Error('ไม่มีภาพ Sentinel-2 ในช่วงที่ค้น (ฉากเมฆ <' + DET.sceneCloud + '%)');
+        let after1 = null;
+        for (const it of items.slice(0, 10)) { if (await clearFrac(it, bbox) >= DET.minClear) { after1 = it; break; } }
+        if (!after1) throw new Error('ไม่มีภาพที่ปลอดเมฆเหนือช่องนี้ (ตรวจ 10 ภาพล่าสุด)');
+        const target = T(after1) - currentCompareDays * 864e5;
+        const olderC = items.filter(it => T(it) <= T(after1) - 3 * 864e5).sort((x, y) => Math.abs(T(x) - target) - Math.abs(T(y) - target));
+        let before = null;
+        for (const it of olderC.slice(0, 8)) { if (await clearFrac(it, bbox) >= DET.minClear) { before = it; break; } }
+        if (!before) throw new Error('ไม่มีภาพ "ก่อน" ที่ปลอดเมฆเหนือช่องนี้');
+        let after2 = null;
+        for (const it of items.filter(x => x !== after1 && x !== before && T(x) <= T(after1) - 3 * 864e5 && T(x) >= T(before) + 3 * 864e5).slice(0, 4)) {
+          if (await clearFrac(it, bbox) >= DET.minClear) { after2 = it; break; }
+        }
+
+        for (const n of (a.screen ? [DET.screenN, DET.fullN] : [DET.fullN])) {
+          const full = n === DET.fullN;
+          const [Bb, A1, A2] = await Promise.all([getBands(before, bbox, n, 'ก่อน'), getBands(after1, bbox, n, 'หลัง'), (full && after2) ? getBands(after2, bbox, n, 'หลัง2') : null]);
+          if (gen !== scanGen) return;
+          const m1 = changeMask(Bb, A1, n);
+          const minPx = Math.max(4, Math.ceil(DET.minRai / pxRai(bbox, n)));
+          const c1 = findClusters(m1.raw, m1.dv, n, minPx);
+          if (!full) { if (!c1.length) { a.scan = 'done'; a.flagged = false; return; } continue; }
+
+          let confirmed = [], unconf = [];
+          if (A2) {
+            const m2 = changeMask(Bb, A2, n);
+            const both = new Uint8Array(n * n), only1 = new Uint8Array(n * n);
+            for (let i = 0; i < n * n; i++) if (m1.raw[i]) { if (m2.raw[i]) both[i] = 1; else only1[i] = 1; }
+            confirmed = findClusters(both, m1.dv, n, minPx); unconf = findClusters(only1, m1.dv, n, minPx);
+          } else unconf = c1;
+          decorate(confirmed, 'confirmed', bbox, n); decorate(unconf, 'unconfirmed', bbox, n);
+          confirmed = confirmed.filter(c => inPark(c.lat, c.lng)); unconf = unconf.filter(c => inPark(c.lat, c.lng));
+
+          let radar = null;
+          if (confirmed.length) { try { radar = await radarCheck(bbox, confirmed, n); } catch (e) { diag('radar: ' + e.message); } }
+          if (gen !== scanGen) return;
+
+          const rgb = x => s2Crop(x, bbox, ['visual'], '&asset_bidx=visual|1,2,3', n);
+          const [bBlob, aBlob] = await Promise.all([fetchBlob(rgb(before), 'rgb-before'), fetchBlob(rgb(after1), 'rgb-after')]);
+          const mask = document.createElement('canvas'); mask.width = mask.height = n;
+          const mx = mask.getContext('2d'), out = mx.createImageData(n, n);
+          const paint = (cl, r, g, b2) => { for (const c of cl) for (const i of c.pix) { const k = i * 4; out.data[k] = r; out.data[k+1] = g; out.data[k+2] = b2; out.data[k+3] = 160; } };
+          paint(unconf, 245, 158, 11); paint(confirmed, 239, 68, 68); mx.putImageData(out, 0, 0);
+
+          const raiC = confirmed.reduce((t, c) => t + c.rai, 0), raiU = unconf.reduce((t, c) => t + c.rai, 0);
+          const dropC = confirmed.length ? confirmed.reduce((t, c) => t + c.drop * c.pix.length, 0) / confirmed.reduce((t, c) => t + c.pix.length, 0) : 0;
+          a.clusters = confirmed.concat(unconf); a.flagged = a.clusters.length > 0;
+          a.real = { valid: Math.round(m1.valid * 100 / (n * n)), beforeUrl: URL.createObjectURL(bBlob), afterUrl: URL.createObjectURL(aBlob), mask,
+                     cnt: a.clusters.length, rai: raiC + raiU, raiC, raiU, nC: confirmed.length, nU: unconf.length, radar,
+                     bi: before.properties.datetime.slice(0, 10), ai: after1.properties.datetime.slice(0, 10),
+                     a2: after2 ? after2.properties.datetime.slice(0, 10) : null };
+          a.area = confirmed.length ? raiC.toFixed(1) + ' ไร่ (ยืนยัน)' : (unconf.length ? raiU.toFixed(1) + ' ไร่ (รอยืนยัน)' : 'ไม่พบ');
+          a.ndvi = confirmed.length ? `ยืนยัน ${confirmed.length} บริเวณ · ΔNDVI −${dropC.toFixed(2)}` : (unconf.length ? `รอยืนยัน ${unconf.length} บริเวณ` : 'ไม่พบการเปลี่ยนแปลง');
+          a.color = confirmed.length ? '#ef4444' : (unconf.length ? '#f59e0b' : '#10b981');
+          a.severity = confirmed.length ? 'high' : (unconf.length ? 'medium' : 'low');
+          if (a.isFire) { a.area = a.fireArea; a.ndvi = a.fireText; a.color = a.overlap ? '#dc2626' : '#f97316'; a.severity = a.overlap ? 'critical' : 'high'; }
+          a.scan = 'done';
+          if (alerts.includes(a)) { try { rebuildMap(); } catch (_) {} }
+        }
+      } catch (err) {
+        console.error('[S2 scan]', a.id, err); diag('สแกน ' + a.id + ' ล้มเหลว: ' + err.message);
+        if (gen !== scanGen) return;
+        a.scan = 'error'; a.ndvi = 'สแกนไม่สำเร็จ'; a.scanErr = err.message; if (a.isFire) a.ndvi = a.fireText;
+      }
+    }
+
+    /* ---- แสดงผลในหน้ารายละเอียด ---- */
+    function resetRealOverlay() {
+      const cv = document.getElementById('changeCanvas'); if (cv) cv.getContext('2d').clearRect(0, 0, cv.width, cv.height);
+      const ov = document.getElementById('changeOverlay'); if (ov) ov.style.display = 'none';
+    }
+    function showReal(a) {
+      const r = a.real; if (!r) return;
+      ++currentLoadToken; viewMode = 's2'; updateLayerButtons('s2');
+      beforeImg.src = r.beforeUrl; afterImg.src = r.afterUrl;
+      const cv = document.getElementById('changeCanvas'); cv.width = cv.height = r.mask.width;
+      cv.getContext('2d').drawImage(r.mask, 0, 0);
+      document.getElementById('changeOverlay').style.display = 'none';
+      beforeDateLabel.textContent = 'ก่อน: ' + formatTH(r.bi) + ' (Sentinel-2)';
+      afterDateLabel.textContent  = 'หลัง: ' + formatTH(r.ai) + ' (Sentinel-2)';
+      cycleLabel.textContent = '🛰 Sentinel-2 · 10 ม./พิกเซล';
+      cycleRangeEl.textContent = formatTH(r.bi) + ' — ' + formatTH(r.ai);
+      afterLabel.textContent = a.label;
+      const parts = [];
+      if (r.nC) parts.push(`<span class="text-red-400">🔴 ยืนยัน ${r.raiC.toFixed(1)} ไร่ (${r.nC} บริเวณ · เห็นซ้ำใน 2 ภาพ)</span>`);
+      if (r.nU) parts.push(`<span class="text-amber-400">🟠 รอยืนยัน ${r.raiU.toFixed(1)} ไร่ (${r.nU} บริเวณ${r.a2 ? '' : ' · มีภาพใหม่ภาพเดียว'})</span>`);
+      if (!r.cnt) parts.push('<span class="text-emerald-400">ไม่พบการเปลี่ยนแปลงที่มีนัยสำคัญ</span>');
+      if (r.radar) parts.push(`<span class="text-blue-300">📡 เรดาร์ ${r.radar.dB.toFixed(1)} dB — ${r.radar.agree ? 'สอดคล้องกับการสูญเสียพืชคลุม' : 'ไม่ชัดเจน'} (ทดลอง)</span>`);
+      layerHint.innerHTML = (a.isFire ? `<span class="text-orange-300">${a.fireText} · ${a.fireInfo}</span><br>` : '') + parts.join('<br>') + `<br><span class="text-slate-400">ใช้ได้ ${r.valid}% ของพื้นที่ · ตัดเมฆ/เงาแล้ว · เกณฑ์ ≥${DET.minRai} ไร่, ΔNDVI ≥${DET.minDrop} · ควรตรวจภาคสนามก่อนสรุป</span>`;
+      modalCoords.textContent = `พิกัด: ${a.lat.toFixed(4)}, ${a.lng.toFixed(4)} | ขนาดพื้นที่: ${a.area}`;
+      setImageLoading(false); requestAnimationFrame(syncImageWidth);
+    }
+    async function rescanS2(a) {
+      setImageLoading(true, 'กำลังวิเคราะห์ Sentinel-2…'); a.real = null; a.screen = false;
+      await analyzeAlert(a, scanGen);
+      if (currentAlert !== a) return;
+      if (a.real) { showReal(a); try { renderList(); } catch (_) {} }
+      else { viewMode = 'gibs'; toast('Sentinel-2 ไม่พร้อม: ' + (a.scanErr || '') + ' — ใช้ภาพ GIBS แทน', 'err'); loadComparison(a, currentOffset, currentCompareDays, currentLayer); }
+    }
+
+    /* ---- เขตแดนอุทยาน (OpenStreetMap / Nominatim) ---- */
+    const boundaryLayer = L.layerGroup().addTo(map);
+    function pip(ring, x, y) {
+      let inside = false;
+      for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+        const xi = ring[i][0], yi = ring[i][1], xj = ring[j][0], yj = ring[j][1];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    }
+    function inPark(lat, lng) {
+      if (!parkPoly) return true;
+      return parkPoly.some(poly => pip(poly[0], lng, lat) && !poly.slice(1).some(h => pip(h, lng, lat)));
+    }
+    function polyBounds() {
+      let w = 1e9, s0 = 1e9, e = -1e9, n = -1e9;
+      parkPoly.forEach(poly => poly[0].forEach(([x, y]) => { w = Math.min(w, x); e = Math.max(e, x); s0 = Math.min(s0, y); n = Math.max(n, y); }));
+      return [w, s0, e, n];
+    }
+    function drawBoundary() {
+      boundaryLayer.clearLayers();
+      if (!parkPoly) return;
+      parkPoly.forEach(poly => L.polygon(poly[0].map(([x, y]) => [y, x]), { color: '#34d399', weight: 2, dashArray: '6 4', fill: false, interactive: false }).addTo(boundaryLayer));
+    }
+    async function loadBoundary() {
+      boundaryState.status = 'pending'; parkPoly = null;
+      const c = currentSettings.center;
+      const key = `forestwatch.boundary.v2:${currentSettings.parkName}@${c.lat.toFixed(2)},${c.lng.toFixed(2)}`;
+      try { const cached = localStorage.getItem(key); if (cached) parkPoly = JSON.parse(cached); } catch (_) {}
+      if (!parkPoly) {
+        const label = TYPE_LABELS[currentSettings.type] || '', name = currentSettings.parkName;
+        const qs = [label + name, name + ' National Park', name];
+        for (let i = 0; i < qs.length && !parkPoly; i++) {
+          try {
+            if (i) await new Promise(r => setTimeout(r, 1100));
+            const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2&polygon_geojson=1&polygon_threshold=0.001&countrycodes=th&limit=5&accept-language=th&q=' + encodeURIComponent(qs[i]));
+            if (!r.ok) throw new Error('Nominatim HTTP ' + r.status);
+            let best = null, bd = 1e9;
+            for (const it of await r.json()) {
+              const g = it.geojson; if (!g || (g.type !== 'Polygon' && g.type !== 'MultiPolygon')) continue;
+              const d = Math.hypot(+it.lat - c.lat, +it.lon - c.lng); if (d < bd && d < 0.5) { bd = d; best = g; }
+            }
+            if (best) {
+              parkPoly = best.type === 'Polygon' ? [best.coordinates] : best.coordinates;
+              try { localStorage.setItem(key, JSON.stringify(parkPoly)); } catch (_) {}
+            } else boundaryState.note = 'ไม่พบเขตอุทยานใน OpenStreetMap (ค้น: ' + qs[i] + ')';
+          } catch (e) { boundaryState.note = e.message; }
+        }
+        if (!parkPoly) diag('เขตอุทยาน: ' + boundaryState.note);
+      }
+      boundaryState.status = parkPoly ? 'ok' : 'warn';
+      if (!parkPoly) boundaryState.note = (boundaryState.note || '') + ' — ใช้ขอบเขตโดยประมาณจากขนาดอุทยาน';
+      drawBoundary();
+    }
+    function ensureBoundary() { if (!boundaryPromise) boundaryPromise = loadBoundary(); return boundaryPromise; }
+    function resetBoundary() { boundaryPromise = null; parkPoly = null; lastExtent = null; boundaryState.status = 'pending'; boundaryLayer.clearLayers(); }
+
+    /* ---- สแกนกริดทั้งพื้นที่ ---- */
+    const gridLayer = L.layerGroup().addTo(map);
+    const cellRects = new Map();
+    const CELL_STYLE = {
+      running: { color: '#fbbf24', weight: 1, dashArray: '4 4', fillOpacity: 0.10 },
+      ok:      { color: '#34d399', weight: 1, dashArray: null, fillOpacity: 0.02 },
+      error:   { color: '#94a3b8', weight: 1, dashArray: '2 6', fillOpacity: 0.0 },
+      flag:    { color: '#ef4444', weight: 1.5, dashArray: null, fillOpacity: 0.0 }
+    };
+    function setCellStyle(cell, k) { const r = cellRects.get(cell.id); if (r) r.setStyle(CELL_STYLE[k]); }
+    function rebuildMap() { clearMapLayers(); buildMapLayers(); }
+    function gridCells() {
+      const c = currentSettings.center, ls = DET.cell / Math.cos(c.lat * Math.PI / 180);
+      const mk = (r, q) => {
+        const lat = c.lat + r * DET.cell, lng = c.lng + q * ls;
+        return { id: `GRID-${r}_${q}`, lat, lng, bbox: [lng - ls / 2, lat - DET.cell / 2, lng + ls / 2, lat + DET.cell / 2],
+          label: 'พื้นที่ NDVI ลดลง', color: '#10b981', severity: 'low', area: '—', ndvi: 'รอสแกน', screen: true, status: 'new', d: r * r + q * q };
+      };
+      const touches = cell => {
+        const [w, s0, e, n] = cell.bbox;
+        for (let i = 0; i <= 2; i++) for (let j = 0; j <= 2; j++) if (inPark(s0 + (n - s0) * i / 2, w + (e - w) * j / 2)) return true;
+        return false;
+      };
+      let cells = [];
+      if (gridMode === 'full') {
+        let r0, r1, q0, q1;
+        if (parkPoly) { const [w, s0, e, n] = polyBounds(); r0 = Math.floor((s0 - c.lat) / DET.cell); r1 = Math.ceil((n - c.lat) / DET.cell); q0 = Math.floor((w - c.lng) / ls); q1 = Math.ceil((e - c.lng) / ls); }
+        else { const half = Math.min(7, Math.ceil(Math.sqrt(currentSettings.areaRai * 1600) / 1000 / 4.44 / 2)); r0 = q0 = -half; r1 = q1 = half; }
+        for (let r = r0; r <= r1; r++) for (let q = q0; q <= q1; q++) { const cell = mk(r, q); if (!parkPoly || touches(cell)) cells.push(cell); }
+      } else {
+        const half = (gridMode - 1) / 2;
+        for (let r = -half; r <= half; r++) for (let q = -half; q <= half; q++) cells.push(mk(r, q));
+      }
+      cells.sort((x, y) => x.d - y.d);
+      gridState.capped = cells.length > 260; if (gridState.capped) cells = cells.slice(0, 260);
+      cells.forEach((x, i) => { x.shortId = 'C' + (i + 1); });
+      lastExtent = [Math.min(...cells.map(x => x.bbox[0])), Math.min(...cells.map(x => x.bbox[1])), Math.max(...cells.map(x => x.bbox[2])), Math.max(...cells.map(x => x.bbox[3]))];
+      return cells;
+    }
+    function updateScanStatus() {
+      const el = document.getElementById('scanStatus'); if (!el) return;
+      const g = gridState, f = fireState, okN = Math.max(0, g.done - g.bad);
+      const errs = (g.cells || []).filter(c => c.scan === 'error');
+      const noImg = errs.filter(c => /ไม่มีภาพ|ไม่พบภาพ/.test(c.scanErr || '')).length;
+      const srv = errs.filter(c => /HTTP (429|5\d\d)|เชื่อมต่อไม่ได้/.test(c.scanErr || '')).length;
+      const failTxt = errs.length ? ` · ล้มเหลว ${errs.length} (ไม่มีภาพไร้เมฆ ${noImg}` + (srv ? ` · เซิร์ฟเวอร์/เครือข่าย ${srv}` : '') + (errs.length - noImg - srv > 0 ? ` · อื่น ๆ ${errs.length - noImg - srv}` : '') + ')' : '';
+      const t1 = g.running ? (g.total ? `กำลังสแกน ${g.done}/${g.total} ช่อง · พบ ${g.found} จุด…` : 'กำลังโหลดเขตอุทยาน…')
+        : (g.total ? `สแกนสำเร็จ ${okN}/${g.total} ช่อง (ครอบคลุม ${Math.round(okN * 100 / g.total)}% ของ${gridMode === 'full' ? 'พื้นที่อุทยาน' : 'ช่วงที่เลือก'}) · พบพื้นที่พืชหาย ${g.found} จุด`
+            + failTxt + (g.capped ? ' · จำกัด 260 ช่อง' : '') + (boundaryState.status === 'warn' ? ' · ⚠️ ใช้ขอบเขตโดยประมาณ' : '') : '');
+      const t2 = f.noKey ? '🔥 ยังไม่ได้ตั้ง MAP_KEY (กดปุ่ม 🔥 เพื่อใส่)' : (f.running ? '🔥 กำลังโหลดจุดความร้อน…'
+        : (f.err ? '🔥 โหลดไม่สำเร็จ: ' + f.err : `🔥 ${f.raw} hotspot ในเขตอุทยาน (${f.groups} กลุ่ม)` + (f.overlap ? ` · ⚠️ ทับพื้นที่พืชหาย ${f.overlap}` : '')));
+      el.textContent = t1 + (t1 ? '\n' : '') + t2; el.style.whiteSpace = 'pre-line'; el.title = g.lastErr || '';
+      { const rb = document.getElementById('gridRetry'); if (rb) rb.style.display = (!g.running && errs.length) ? 'block' : 'none'; }
+      if (g.lastErr && g.lastErr !== updateScanStatus._last) { updateScanStatus._last = g.lastErr; diag('สแกนล้มเหลว: ' + g.lastErr); } try { renderDiag(); } catch (_) {}
+    }
+    function loadVset() { try { return new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch (_) { return new Set(); } }
+    async function processCell(cell, gen, vset, retry) {
+      setCellStyle(cell, 'running');
+      await analyzeAlert(cell, gen);
+      if (gen !== scanGen) return;
+      cell.screen = false;
+      if (!retry) gridState.done++;
+      gridState.bad = (gridState.cells || []).filter(c => c.scan === 'error').length;
+      if (cell.scan === 'error') { gridState.lastErr = cell.scanErr; setCellStyle(cell, 'error'); }
+      else if (cell.flagged) {
+        gridState.found++; cell.status = vset.has(cell.id) ? 'verified' : 'new';
+        if (!alerts.includes(cell)) alerts.push(cell);
+        setCellStyle(cell, 'flag'); rebuildMap(); try { renderList(); } catch (_) {}
+      } else setCellStyle(cell, 'ok');
+      updateScanStatus();
+    }
+    async function runAllDetection() {
+      const gen = ++scanGen; lastScanTs = Date.now();
+      alerts = []; clearMapLayers(); gridLayer.clearLayers(); cellRects.clear();
+      Object.assign(gridState, { running: true, done: 0, total: 0, found: 0, bad: 0, lastErr: '', capped: false, cells: [] });
+      updateScanStatus(); try { renderList(); } catch (_) {}
+      await ensureBoundary(); if (gen !== scanGen) return;
+      const cells = gridCells();
+      Object.assign(gridState, { total: cells.length, cells });
+      cells.forEach(c => { const [w, s0, e, n] = c.bbox; cellRects.set(c.id, L.rectangle([[s0, w], [n, e]], { ...CELL_STYLE.ok, interactive: false }).addTo(gridLayer)); });
+      try { map.fitBounds(gridLayer.getBounds().pad(0.05)); } catch (_) {}
+      updateScanStatus(); try { renderList(); } catch (_) {}
+      const vset = loadVset(); let idx = 0;
+      const worker = async () => { while (idx < cells.length) { const cell = cells[idx++]; if (gen !== scanGen) return; await processCell(cell, gen, vset, false); } };
+      await Promise.all(Array.from({ length: DET.conc }, worker));
+      if (gen !== scanGen) return;
+      gridState.running = false; mergeFireAlerts();
+      diag(`สแกนเสร็จ ${gridState.total} ช่อง · สำเร็จ ${gridState.total - gridState.bad} · ล้มเหลว ${gridState.bad} · พบ ${gridState.found} จุด`);
+      toast(`สแกน ${gridState.total} ช่องเสร็จ · พบ ${gridState.found} จุด` + (gridState.bad ? ` · ล้มเหลว ${gridState.bad}` : ''), gridState.bad ? 'err' : 'ok');
+    }
+    async function retryFailed() {
+      if (gridState.running) { toast('กำลังสแกนอยู่'); return; }
+      const gen = scanGen, failed = (gridState.cells || []).filter(c => c.scan === 'error'); if (!failed.length) return;
+      gridState.running = true; Object.keys(s2Cache).forEach(k => delete s2Cache[k]); updateScanStatus();
+      const vset = loadVset(); let idx = 0;
+      const worker = async () => { while (idx < failed.length) { const c = failed[idx++]; if (gen !== scanGen) return; c.scan = undefined; c.screen = true; await processCell(c, gen, vset, true); } };
+      await Promise.all(Array.from({ length: DET.conc }, worker));
+      if (gen !== scanGen) return;
+      gridState.running = false; mergeFireAlerts();
+      toast(gridState.bad ? `ลองซ้ำแล้ว ยังล้มเหลว ${gridState.bad} ช่อง` : 'ลองซ้ำสำเร็จทุกช่อง', gridState.bad ? 'err' : 'ok');
+    }
+
+    /* ===== FIRE HOTSPOTS (NASA FIRMS: SNPP + NOAA-20 + NOAA-21) — โหลดอัตโนมัติ + จับคู่กับพื้นที่พืชหาย ===== */
+    const FIRMS_SOURCES = ['VIIRS_SNPP_NRT', 'VIIRS_NOAA20_NRT', 'VIIRS_NOAA21_NRT'];
+    const fireState = { running: false, raw: 0, groups: 0, overlap: 0, err: '', noKey: false };
+    let fireRaw = [];
+    const fireDotLayer = L.layerGroup().addTo(map);
+    function gridExtent() {
+      if (lastExtent) return lastExtent;
+      if (parkPoly) return polyBounds();
+      const c = currentSettings.center, ls = DET.cell / Math.cos(c.lat * Math.PI / 180);
+      return [c.lng - 2.5 * ls, c.lat - 2.5 * DET.cell, c.lng + 2.5 * ls, c.lat + 2.5 * DET.cell];
+    }
+    async function fetchFirmsOne(src, bboxStr, days) {
+      const url = `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${firmsKey}/${src}/${bboxStr}/${days}`;
+      let res; try { res = await fetch(url); } catch (e) { throw new Error('เรียก FIRMS ไม่ได้ (เครือข่าย/CORS)'); }
+      if (!res.ok) throw new Error(`FIRMS HTTP ${res.status}`);
+      const text = await res.text();
+      if (text.trim().startsWith('<') || /error|invalid|forbidden/i.test(text.slice(0, 200))) throw new Error('MAP_KEY ไม่ถูกต้อง');
+      const lines = text.trim().split('\n'); if (lines.length <= 1) return [];
+      const hd = lines[0].split(',').map(h => h.trim());
+      return lines.slice(1).map(line => {
+        const v = line.split(','), o = {}; hd.forEach((h, i) => { o[h] = (v[i] || '').trim(); });
+        return { latitude: parseFloat(o.latitude), longitude: parseFloat(o.longitude), acq_date: o.acq_date, acq_time: o.acq_time,
+                 confidence: o.confidence, satellite: o.satellite || src, frp: parseFloat(o.frp) || 0 };
+      }).filter(h => !isNaN(h.latitude) && !isNaN(h.longitude));
+    }
+    async function fetchFirmsAll(bboxStr, days) {
+      const rs = await Promise.allSettled(FIRMS_SOURCES.map(x => fetchFirmsOne(x, bboxStr, days)));
+      const ok = rs.filter(r => r.status === 'fulfilled');
+      if (!ok.length) throw rs[0].reason;
+      const seen = new Set(), out = [];
+      ok.forEach(r => r.value.forEach(h => {
+        const k = h.latitude.toFixed(3) + ',' + h.longitude.toFixed(3) + ',' + h.acq_date + ',' + h.acq_time;
+        if (!seen.has(k)) { seen.add(k); out.push(h); }
+      }));
+      return out;
+    }
+    const fireConf = h => { const c = String(h.confidence || '').toLowerCase(); return (c === 'h' || c.includes('high')) ? 'high' : ((c === 'l' || c.includes('low')) ? 'low' : 'nominal'); };
+    function fireTime(h) {
+      const t = String(h.acq_time || '0').padStart(4, '0'), d = new Date(`${h.acq_date}T${t.slice(0, 2)}:${t.slice(2)}:00Z`);
+      return isNaN(d) ? '' : d.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' น.';
+    }
+    function nearNdviCluster(lat, lng) {
+      const pad = 0.004;   // ≈450 ม. (ชดเชยความคลาดเคลื่อนของ VIIRS 375 ม.)
+      for (const a of alerts) {
+        if (a.isFire || !a.clusters) continue;
+        for (const c of a.clusters) {
+          let la0 = 1e9, la1 = -1e9, ln0 = 1e9, ln1 = -1e9;
+          c.ll.forEach(([la, ln]) => { la0 = Math.min(la0, la); la1 = Math.max(la1, la); ln0 = Math.min(ln0, ln); ln1 = Math.max(ln1, ln); });
+          if (lat >= la0 - pad && lat <= la1 + pad && lng >= ln0 - pad && lng <= ln1 + pad) return c;
+        }
+      }
+      return null;
+    }
+    function mergeFireAlerts() {
+      alerts = alerts.filter(a => !a.isFire);
+      fireDotLayer.clearLayers();
+      const groups = new Map();
+      fireRaw.forEach(h => {
+        L.circleMarker([h.latitude, h.longitude], { radius: 3, color: '#fb923c', weight: 1, fillColor: '#f97316', fillOpacity: .8, interactive: false }).addTo(fireDotLayer);
+        const k = Math.round(h.latitude / 0.01) + '_' + Math.round(h.longitude / 0.01);
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(h);
+      });
+      let vset = new Set(); try { vset = new Set(JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')); } catch (_) {}
+      const rank = { critical: 0, high: 1, medium: 2 }, list = [];
+      groups.forEach((pts, k) => {
+        const n = pts.length, lat = pts.reduce((t, h) => t + h.latitude, 0) / n, lng = pts.reduce((t, h) => t + h.longitude, 0) / n;
+        const hi = pts.some(h => fireConf(h) === 'high'), near = nearNdviCluster(lat, lng);
+        const last = pts.reduce((m, h) => (`${h.acq_date}${h.acq_time}` > `${m.acq_date}${m.acq_time}` ? h : m), pts[0]);
+        const ls = 0.02 / Math.cos(lat * Math.PI / 180);
+        list.push({ id: 'FIRE-' + k, lat, lng, bbox: [lng - ls, lat - 0.02, lng + ls, lat + 0.02], isFire: true, screen: false, label: '🔥 จุดความร้อน',
+          overlap: !!near, severity: near ? 'critical' : (hi ? 'high' : 'medium'), color: near ? '#dc2626' : (hi ? '#f97316' : '#fbbf24'),
+          fireArea: `${n} hotspot${hi ? ' · high' : ''}`, fireText: near ? '🔥+🌲 ไฟทับพื้นที่พืชหาย' : `🔥 ${n} hotspot`,
+          fireInfo: `ล่าสุด ${fireTime(last)} · ${last.satellite} · ความเชื่อมั่น ${fireConf(last)}`, status: vset.has('FIRE-' + k) ? 'verified' : 'new' });
+      });
+      list.sort((x, y) => rank[x.severity] - rank[y.severity]);
+      fireState.groups = list.length; fireState.overlap = list.filter(x => x.overlap).length;
+      list.slice(0, 30).forEach((x, i) => { x.shortId = 'F' + (i + 1); x.area = x.fireArea; x.ndvi = x.fireText; alerts.push(x); });
+      try { rebuildMap(); } catch (_) {}
+      try { renderList(); } catch (_) {}
+      updateScanStatus();
+      if (fireState.overlap) toast(`⚠️ พบไฟทับพื้นที่พืชหาย ${fireState.overlap} จุด`, 'err');
+    }
+    async function autoLoadFire() {
+      if (!firmsKey) { fireState.noKey = true; updateScanStatus(); return; }
+      fireState.noKey = false; fireState.running = true; fireState.err = ''; updateScanStatus();
+      try {
+        await ensureBoundary();
+        fireRaw = (await fetchFirmsAll(gridExtent().map(v => v.toFixed(4)).join(','), hotspotDays)).filter(h => inPark(h.latitude, h.longitude));
+        fireState.raw = fireRaw.length;
+      } catch (err) { fireRaw = []; fireState.raw = 0; fireState.err = err.message; diag('FIRMS: ' + err.message); }
+      fireState.running = false;
+      mergeFireAlerts();
+    }
+
+    (function mountScanCtl() {
+      const ctl = document.createElement('div');
+      const opts = [['full', 'ทั้งอุทยาน (ตามเขตแดน)'], [3, '3×3 ช่อง · ~13 กม.'], [5, '5×5 ช่อง · ~22 กม.'], [7, '7×7 ช่อง · ~31 กม.'], [9, '9×9 ช่อง · ~40 กม.']];
+      ctl.innerHTML = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px">'
+        + '<select id="gridSel" class="form-select" style="flex:1;padding:.5rem .6rem;font-size:.75rem">'
+        + opts.map(([v, t]) => `<option value="${v}"${String(v) === String(gridMode) ? ' selected' : ''}>${t}</option>`).join('')
+        + '</select><button id="gridRun" type="button" style="background:#059669;color:#fff;border-radius:.5rem;padding:.5rem .8rem;font-size:.75rem;font-weight:700;white-space:nowrap">🔄 สแกนใหม่</button></div>'
+        + '<p id="scanStatus" style="font-size:11px;color:#94a3b8;margin:0 0 8px"></p>'
+        + '<button id="gridRetry" type="button" style="display:none;width:100%;background:#334155;color:#fff;border-radius:.5rem;padding:.5rem;font-size:.75rem;font-weight:700;margin:0 0 8px">🔁 ลองซ้ำช่องที่ล้มเหลว</button>';
+      listEl.parentNode.insertBefore(ctl, listEl);
+      ctl.querySelector('#gridSel').addEventListener('change', e => {
+        gridMode = e.target.value === 'full' ? 'full' : +e.target.value;
+        try { localStorage.setItem('forestwatch.gridsize.v1', String(gridMode)); } catch (_) {}
+      });
+      ctl.querySelector('#gridRun').addEventListener('click', () => { if (gridState.running) { toast('กำลังสแกนอยู่'); return; } runAllDetection(); autoLoadFire(); });
+      ctl.querySelector('#gridRetry').addEventListener('click', retryFailed);
+    })();
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && !gridState.running && lastScanTs && Date.now() - lastScanTs > RADAR_CACHE_TTL) { runAllDetection(); autoLoadFire(); }
+    });
+
+    /* ===== OPEN EXTERNAL LINK (กัน popup ถูกบล็อก) ===== */
+    function openExternal(url) {
+      try {   // ลิงก์จริงที่ถูกคลิกจากการกดของผู้ใช้ — เสถียรกว่า window.open และไม่คืน null เมื่อใช้ noopener
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        document.body.appendChild(a); a.click(); a.remove();
+      } catch (_) {}
+      const old = document.getElementById('extLinkCard'); if (old) old.remove();
+      const card = document.createElement('div');
+      card.id = 'extLinkCard';
+      card.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(64px + env(safe-area-inset-bottom));z-index:99998;background:#0f172a;border:1px solid #3b82f6;border-radius:14px;padding:12px;color:#e2e8f0;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.5)';
+      card.innerHTML = '<div style="margin-bottom:8px">ถ้าหน้า Copernicus ไม่เปิดเอง (ถูกบล็อก) ให้แตะปุ่มด้านล่าง</div>'
+        + '<div style="display:flex;gap:8px"><a id="extOpen" href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener noreferrer" style="flex:1;text-align:center;background:#2563eb;color:#fff;border-radius:10px;padding:10px;font-weight:700;text-decoration:none">🌍 เปิดลิงก์</a>'
+        + '<button id="extCopy" style="flex:1;background:#334155;color:#fff;border-radius:10px;padding:10px;font-weight:700">📋 คัดลอกลิงก์</button>'
+        + '<button id="extClose" style="width:42px;background:#1e293b;color:#94a3b8;border-radius:10px">✕</button></div>';
+      document.body.appendChild(card);
+      card.querySelector('#extClose').addEventListener('click', () => card.remove());
+      card.querySelector('#extOpen').addEventListener('click', () => setTimeout(() => card.remove(), 400));
+      card.querySelector('#extCopy').addEventListener('click', async () => {
+        let ok = false;
+        try { await navigator.clipboard.writeText(url); ok = true; } catch (_) {
+          const t = document.createElement('textarea'); t.value = url; document.body.appendChild(t); t.select();
+          try { ok = document.execCommand('copy'); } catch (_) {} t.remove();
+        }
+        toast(ok ? '✓ คัดลอกลิงก์แล้ว วางในเบราว์เซอร์ได้เลย' : 'คัดลอกไม่ได้ — กดค้างที่ปุ่ม "เปิดลิงก์"', ok ? 'ok' : 'err');
+      });
+      setTimeout(() => { if (card.isConnected) card.remove(); }, 20000);
+    }
+
+    /* ===== DIAGNOSTICS — แผงวินิจฉัยบนหน้าจอหลักทุกครั้ง ===== */
+    const diagLog = [];
+    const health = { leaflet: 'pending', tiles: 'pending', gibs: 'pending', stac: 'pending', firms: 'pending' };
+    function diag(m) {
+      diagLog.push(new Date().toLocaleTimeString('th-TH') + ' ' + m);
+      if (diagLog.length > 120) diagLog.shift();
+      try { renderDiag(); } catch (_) {}
+    }
+    function derivedHealth() {
+      const g = gridState, f = fireState, h = Object.assign({}, health);
+      h.scan = g.running || !g.total ? 'pending' : (g.bad && g.bad >= g.total ? 'fail' : (g.bad ? 'warn' : 'ok'));
+      h.boundary = boundaryState.status; h.fire = f.running ? 'pending' : (f.noKey ? 'warn' : (f.err ? 'fail' : 'ok'));
+      return h;
+    }
+    function renderDiag() {
+      const box = document.getElementById('diagPanel'); if (!box) return;
+      const h = derivedHealth(), ic = { ok: '✅', fail: '❌', warn: '⚠️', pending: '⏳' };
+      const names = [['leaflet', 'แผนที่'], ['tiles', 'ภาพพื้นหลัง'], ['gibs', 'NASA GIBS'], ['stac', 'Planetary Computer'], ['firms', 'FIRMS'], ['scan', 'สแกน Sentinel-2'], ['boundary', 'เขตอุทยาน'], ['fire', 'จุดไฟ']];
+      const fails = names.filter(([k]) => h[k] === 'fail').length, warns = names.filter(([k]) => h[k] === 'warn').length;
+      const pend = names.some(([k]) => h[k] === 'pending');
+      const sum = fails ? `❌ พบปัญหา ${fails} รายการ` : (warns ? `⚠️ ใช้งานได้ มีข้อควรทราบ ${warns} รายการ` : (pend ? '⏳ กำลังตรวจระบบ…' : '✅ ระบบปกติ'));
+      box.querySelector('#diagSum').textContent = '🩺 ' + sum;
+      box.querySelector('#diagChips').innerHTML = names.map(([k, t]) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;border-radius:999px;background:#1e293b;color:${h[k] === 'fail' ? '#fca5a5' : (h[k] === 'warn' ? '#fcd34d' : '#cbd5e1')}">${ic[h[k]]} ${t}</span>`).join('');
+      box.querySelector('#diagBody').textContent = diagLog.slice(-10).join('\n') || '(ยังไม่มีบันทึก)';
+      const dot = document.getElementById('diagDot');
+      if (dot) dot.style.background = fails ? '#ef4444' : (warns ? '#f59e0b' : (pend ? '#64748b' : '#10b981'));
+    }
+    (function mountDiag() {
+      const btn = document.createElement('button');
+      btn.type = 'button'; btn.setAttribute('aria-label', 'แผงวินิจฉัย');
+      btn.style.cssText = 'position:fixed;left:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:99999;width:40px;height:40px;border-radius:50%;background:#0f172a;color:#fff;border:1px solid #475569;font-size:18px;line-height:1';
+      btn.innerHTML = '🩺<span id="diagDot" style="position:absolute;top:1px;right:1px;width:11px;height:11px;border-radius:50%;background:#64748b;border:2px solid #0f172a"></span>';
+      const box = document.createElement('div');
+      box.id = 'diagPanel';
+      box.style.cssText = 'display:none;position:fixed;left:8px;right:8px;bottom:calc(56px + env(safe-area-inset-bottom));max-height:55vh;overflow:auto;z-index:99999;background:#020617f2;color:#e2e8f0;border:1px solid #475569;border-radius:14px;padding:10px;font-size:11px';
+      box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center"><b id="diagSum" style="font-size:12px">🩺 กำลังตรวจระบบ…</b><button id="diagClose" type="button" style="color:#94a3b8;padding:2px 8px">✕</button></div>'
+        + '<div id="diagChips" style="margin-top:6px"></div>'
+        + '<pre id="diagBody" style="white-space:pre-wrap;word-break:break-all;font:10.5px/1.5 ui-monospace,Menlo,monospace;color:#94a3b8;margin:6px 0;max-height:150px;overflow:auto"></pre>'
+        + '<div style="display:flex;gap:8px"><button id="diagRun" type="button" style="flex:1;background:#334155;color:#fff;border-radius:8px;padding:7px;font-weight:700">รันทดสอบใหม่</button>'
+        + '<button id="diagCopy" type="button" style="flex:1;background:#334155;color:#fff;border-radius:8px;padding:7px;font-weight:700">คัดลอกบันทึก</button></div>';
+      document.body.appendChild(btn); document.body.appendChild(box);
+      btn.addEventListener('click', () => { box.style.display = box.style.display === 'none' ? 'block' : 'none'; renderDiag(); });
+      box.querySelector('#diagClose').addEventListener('click', () => { box.style.display = 'none'; });
+      box.querySelector('#diagRun').addEventListener('click', () => selfTest());
+      box.querySelector('#diagCopy').addEventListener('click', async () => {
+        const t = diagLog.join('\n') || '(ว่าง)'; let ok = false;
+        try { await navigator.clipboard.writeText(t); ok = true; } catch (_) {
+          const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+          try { ok = document.execCommand('copy'); } catch (_) {} ta.remove();
+        }
+        toast(ok ? '✓ คัดลอกบันทึกแล้ว' : 'คัดลอกไม่ได้', ok ? 'ok' : 'err');
+      });
+      window.addEventListener('error', e => diag('JS error: ' + (e.message || e.type)));
+      window.addEventListener('unhandledrejection', e => diag('Promise error: ' + ((e.reason && e.reason.message) || e.reason)));
+      renderDiag();
+    })();
+    function imgTest(url) { return new Promise(r => { const i = new Image(); const t = setTimeout(() => r('timeout'), 12000); i.onload = () => { clearTimeout(t); r('OK'); }; i.onerror = () => { clearTimeout(t); r('ล้มเหลว/ถูกบล็อก'); }; i.src = url; }); }
+    async function selfTest() {
+      Object.keys(health).forEach(k => { health[k] = 'pending'; }); renderDiag();
+      diag('— เริ่มทดสอบ — ' + location.protocol + '//' + location.host);
+      health.leaflet = typeof L !== 'undefined' ? 'ok' : 'fail'; diag('แผนที่ Leaflet: ' + (health.leaflet === 'ok' ? 'OK' : 'ไม่โหลด'));
+      const d = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
+      const c = currentSettings.center, bb = [c.lng - .02, c.lat - .02, c.lng + .02, c.lat + .02];
+      const [t1, t2] = await Promise.all([
+        imgTest('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/6/28/50'),
+        imgTest(gibsUrl({ bbox: bb, date: d, size: 64, layer: 'viirs' }))]);
+      health.tiles = t1 === 'OK' ? 'ok' : 'fail'; diag('ภาพพื้นหลัง ArcGIS: ' + t1);
+      health.gibs = t2 === 'OK' ? 'ok' : 'fail'; diag('NASA GIBS: ' + t2);
+      try { const r = await fetch(PC + '/stac/v1/'); health.stac = r.ok ? 'ok' : 'fail'; diag('Planetary Computer STAC: HTTP ' + r.status); }
+      catch (e) { health.stac = 'fail'; diag('Planetary Computer STAC: เชื่อมต่อไม่ได้/ถูกบล็อก'); }
+      try { const r = await fetch('https://firms.modaps.eosdis.nasa.gov/api/'); health.firms = r.ok ? 'ok' : 'fail'; diag('FIRMS: HTTP ' + r.status); }
+      catch (e) { health.firms = 'fail'; diag('FIRMS: เชื่อมต่อไม่ได้/ติด CORS'); }
+      diag('— จบทดสอบ —');
+    }
+    (function mountDetectUI() {
+      const cv = document.createElement('canvas'); cv.id = 'changeCanvas';
+      cv.style.cssText = 'position:absolute;top:0;left:0;height:100%;pointer-events:none;image-rendering:pixelated;';
+      document.getElementById('changeOverlay').parentNode.appendChild(cv);
+      const b = document.createElement('button');
+      b.textContent = '🔄 ตรวจซ้ำจุดนี้ (Sentinel-2 + NDVI)';
+      b.className = 'mt-2 w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs py-2 rounded-lg font-bold';
+      b.addEventListener('click', async () => { const a = currentAlert; if (!a) return; setImageLoading(true, 'กำลังตรวจซ้ำ…'); Object.keys(s2Cache).forEach(k => delete s2Cache[k]); await analyzeAlert(a, scanGen); try { renderList(); } catch (_) {} if (currentAlert === a) { if (a.real) showReal(a); else { setImageLoading(false); toast('ตรวจไม่สำเร็จ: ' + (a.scanErr || ''), 'err'); } } });
+      layerHint.insertAdjacentElement('afterend', b);
+    })();
+
+    function openAlertModal(id) {
+      const a = getAlertById(id);
+      if (!a) return;
+      currentAlert = a; currentOffset = 0; currentCompareDays = 5;
+      currentLayer = 'hls'; lastResolvedLayer = null;
+      modalTitle.textContent = `รายละเอียด ${a.id}`;
+      modalCoords.textContent = `พิกัด: ${a.lat.toFixed(4)}, ${a.lng.toFixed(4)} | ขนาดพื้นที่: ${a.area}`;
+      afterLabel.textContent = a.label;
+      setSlider(50); updateLayerButtons('hls');
+      const layer = layerByAlertId.get(a.id);
+      if (layer) map.flyToBounds(layer.getBounds().pad(2.5), { duration: 0.8 });
+      else map.flyTo([a.lat, a.lng], 15, { duration: 0.8 });
+      modal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      resetRealOverlay();
+      if (a.real) { viewMode = 's2'; showReal(a); }
+      else if (a.scan === 'running') { viewMode = 's2'; setImageLoading(true, 'กำลังวิเคราะห์ Sentinel-2…'); }
+      else if (a.isFire) { viewMode = 's2'; rescanS2(a); }
+      else { viewMode = 'gibs'; loadComparison(a, currentOffset, currentCompareDays, currentLayer); }
+    }
+
+    function closeModal() {
+      currentLoadToken++;
+      modal.classList.add('hidden');
+      document.body.style.overflow = '';
+      currentAlert = null;
+    }
+
+    layerBtns.forEach(b => b.addEventListener('click', () => {
+      if (!currentAlert) return;
+      const nl = b.dataset.layer;
+      if (nl === currentLayer && viewMode !== 's2') return;
+      viewMode = 'gibs'; resetRealOverlay();
+      currentLayer = nl;
+      updateLayerButtons(nl);
+      loadComparison(currentAlert, currentOffset, currentCompareDays, currentLayer);
+    }));
+
+    const compareBox    = document.getElementById('compareBox');
+    const afterWrapper  = document.getElementById('afterImageWrapper');
+    const sliderHandle  = document.getElementById('sliderHandle');
+    const sliderButton  = document.getElementById('sliderButton');
+    const changeOverlay = document.getElementById('changeOverlay');
+    let isDragging = false;
+
+    function syncImageWidth() {
+      const w = compareBox.offsetWidth;
+      if (w <= 0) return;
+      afterImg.style.width = w + 'px';
+      changeOverlay.style.width = w + 'px'; { const cc = document.getElementById('changeCanvas'); if (cc) cc.style.width = w + 'px'; }
+    }
+    function setSlider(pct) {
+      pct = Math.max(0, Math.min(100, pct));
+      afterWrapper.style.width = pct + '%';
+      sliderHandle.style.left = pct + '%';
+      sliderButton.setAttribute('aria-valuenow', Math.round(pct));
+    }
+    function moveSlider(clientX) {
+      const rect = compareBox.getBoundingClientRect();
+      if (rect.width === 0) return;
+      setSlider(((clientX - rect.left) / rect.width) * 100);
+    }
+    compareBox.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      isDragging = true;
+      try { compareBox.setPointerCapture(e.pointerId); } catch (_) {}
+      moveSlider(e.clientX);
+    });
+    compareBox.addEventListener('pointermove', e => { if (isDragging) moveSlider(e.clientX); });
+    function endDrag(e) {
+      if (!isDragging) return;
+      isDragging = false;
+      try { compareBox.releasePointerCapture(e.pointerId); } catch (_) {}
+    }
+    compareBox.addEventListener('pointerup', endDrag);
+    compareBox.addEventListener('pointercancel', endDrag);
+    sliderButton.addEventListener('keydown', e => {
+      const cur = parseFloat(afterWrapper.style.width) || 50;
+      const step = e.shiftKey ? 20 : 5;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); setSlider(cur - step); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); setSlider(cur + step); }
+      if (e.key === 'Home') { e.preventDefault(); setSlider(0); }
+      if (e.key === 'End') { e.preventDefault(); setSlider(100); }
+    });
+    if ('ResizeObserver' in window) new ResizeObserver(syncImageWidth).observe(compareBox);
+    else window.addEventListener('resize', syncImageWidth);
+
+    prevCycleBtn.addEventListener('click', () => {
+      if (!currentAlert || currentOffset >= CFG.maxCycles - 1) return;
+      currentOffset++;
+      loadComparison(currentAlert, currentOffset, currentCompareDays, currentLayer);
+    });
+    nextCycleBtn.addEventListener('click', () => {
+      if (!currentAlert || currentOffset <= 0) return;
+      currentOffset--;
+      loadComparison(currentAlert, currentOffset, currentCompareDays, currentLayer);
+    });
+    compareModeBtns.forEach(b => b.addEventListener('click', () => {
+      if (!currentAlert) return;
+      currentCompareDays = +b.dataset.days;
+      loadComparison(currentAlert, currentOffset, currentCompareDays, currentLayer);
+    }));
+    document.getElementById('btnRefresh').addEventListener('click', () => {
+      currentOffset = 0;
+      toast('รีเฟรชข้อมูลดาวเทียมแล้ว');
+      if (currentAlert && !modal.classList.contains('hidden')) {
+        loadComparison(currentAlert, currentOffset, currentCompareDays, currentLayer);
+      }
+    });
+
+    function isValidCoord(lat, lng) {
+      return typeof lat === 'number' && typeof lng === 'number' && !isNaN(lat) && !isNaN(lng)
+        && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+    }
+    function navigateToCoords(lat, lng, label) {
+      if (!isValidCoord(lat, lng)) { toast('พิกัดไม่ถูกต้อง', 'err'); return; }
+      const dest = `${lat},${lng}`;
+      const ua = navigator.userAgent;
+      const isIOS = /iPad|iPhone|iPod/.test(ua)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      const url = isIOS
+        ? `https://maps.apple.com/?daddr=${dest}&q=${encodeURIComponent(label || 'ForestWatch')}&dirflg=d`
+        : `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+      const a = document.createElement('a');
+      a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+      a.style.display = 'none';
+      document.body.appendChild(a); a.click();
+      setTimeout(() => a.remove(), 150);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(dest)
+          .then(() => toast(`นำทาง ${dest} — คัดลอกพิกัดแล้ว`))
+          .catch(() => toast(`นำทางไปยัง ${dest}`));
+      } else { toast(`นำทางไปยัง ${dest}`); }
+    }
+    document.getElementById('btnNavigate').addEventListener('click', e => {
+      e.preventDefault(); e.stopPropagation();
+      if (!currentAlert) { toast('ไม่พบข้อมูลพิกัด', 'err'); return; }
+      navigateToCoords(currentAlert.lat, currentAlert.lng, currentAlert.shortId);
+    });
+
+    // ⭐ v2.5: เปิด Copernicus Browser
+    document.getElementById('btnOpenS1').addEventListener('click', () => {
+      if (!currentAlert) return;
+      const url = getCopernicusBrowserUrl(currentAlert.lat, currentAlert.lng, {
+        collection: 'sentinel-1', days: 90, preset: 'vv'
+      });
+      openExternal(url);
+      currentLayer = 'sentinel1';
+      updateLayerButtons('sentinel1');
+      loadComparison(currentAlert, currentOffset, currentCompareDays, 'sentinel1');
+    });
+    document.getElementById('btnOpenS1Old').addEventListener('click', () => {
+      if (!currentAlert) return;
+      const url = getSentinel1Url(currentAlert.lat, currentAlert.lng, 365, 'VV');
+      openExternal(url);
+      toast('🛰 เปิด EO Browser (สำรอง)');
+    });
+
+    document.getElementById('closeModalBtn').addEventListener('click', closeModal);
+    document.getElementById('alertHomeBtn').addEventListener('click', closeModal);
+    modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+
+    document.addEventListener('keydown', e => {
+      if (e.key !== 'Escape') return;
+      if (!customParkModal.classList.contains('hidden')) { closeCustomParkModal(); return; }
+      if (!modal.classList.contains('hidden')) { closeModal(); return; }
+      if (!settingsModal.classList.contains('hidden')) { closeSettings(); return; }
+      const rm = document.getElementById('radarModal');
+      if (!rm.classList.contains('hidden')) { closeRadarModal(); return; }
+      const hm = document.getElementById('hotspotModal');
+      if (!hm.classList.contains('hidden')) { closeHotspotModal(); return; }
+      const pm = document.getElementById('pwaModal');
+      if (!pm.classList.contains('hidden')) closePwaModal();
+    });
+
+    document.getElementById('btnGeoJSON').addEventListener('click', () => {
+      if (!currentAlert) return;
+      const a = currentAlert, d = 0.0018;
+      const geoSquare = {
+        type: 'Feature',
+        properties: {
+          id: a.id, area_rai: a.area, ndvi: a.ndvi, status: a.status,
+          imagery_layer: lastResolvedLayer || 'unknown',
+          park: `${TYPE_LABELS[currentSettings.type]}${currentSettings.parkName}`,
+          province: currentSettings.province
+        },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [[
+            [a.lng - d, a.lat + d], [a.lng + d, a.lat + d],
+            [a.lng + d, a.lat - d], [a.lng - d, a.lat - d],
+            [a.lng - d, a.lat + d]
+          ]]
+        }
+      };
+      const geojson = (a.clusters && a.clusters.length) ? { type: 'FeatureCollection', features: a.clusters.map(c => ({
+        type: 'Feature',
+        properties: { id: a.id, status: c.status, area_rai: +c.rai.toFixed(2), mean_ndvi_drop: +c.drop.toFixed(2),
+          before: a.real && a.real.bi, after: a.real && a.real.ai, radar_db: (a.real && a.real.radar) ? +a.real.radar.dB.toFixed(1) : null,
+          park: `${TYPE_LABELS[currentSettings.type]}${currentSettings.parkName}`, province: currentSettings.province },
+        geometry: { type: 'Polygon', coordinates: [c.ll.map(q => [q[1], q[0]]).concat([[c.ll[0][1], c.ll[0][0]]])] }
+      })) } : geoSquare;
+      const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/geo+json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url; link.download = `${a.id}.geojson`;
+      document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      toast('ดาวน์โหลด GeoJSON สำเร็จ');
+    });
+
+    document.getElementById('btnSave').addEventListener('click', () => {
+      if (!currentAlert) return;
+      const a = getAlertById(currentAlert.id);
+      if (a && a.status !== 'verified') {
+        a.status = 'verified';
+        persistVerified();
+        refreshPolygonStyle(a);
+        renderList();
+        toast(`บันทึกผลตรวจสอบ ${a.shortId} เรียบร้อย`);
+      } else { toast(`จุด ${a?.shortId} ถูกตรวจสอบแล้ว`); }
+      closeModal();
+    });
+
+    const netStatus = document.getElementById('netStatus');
+    function updateNetStatus() {
+      const on = navigator.onLine;
+      netStatus.textContent = on ? 'ออนไลน์' : 'ออฟไลน์';
+      netStatus.className = 'text-[10px] px-2 py-0.5 rounded-full ' +
+        (on ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300');
+    }
+    window.addEventListener('online', updateNetStatus);
+    window.addEventListener('offline', updateNetStatus);
+    updateNetStatus();
+
+    const radarModal = document.getElementById('radarModal');
+
+    function renderRadarContent() {
+      const { lat, lng } = currentSettings.center;
+      const parkLabel = `${TYPE_LABELS[currentSettings.type]}${currentSettings.parkName}`;
+      const el = document.getElementById('radarContent');
+
+      const hasData = radarAvailability.status === 'found';
+      const isNotfoundOrError = radarAvailability.status === 'notfound' || radarAvailability.status === 'error';
+      const effectiveRange = isNotfoundOrError ? 365 : radarAvailability.range;
+      const targetDate = hasData ? radarAvailability.date : null;
+
+      const urlVV = getCopernicusBrowserUrl(lat, lng, { collection: 'sentinel-1', days: effectiveRange, preset: 'vv' });
+      const urlVH = getCopernicusBrowserUrl(lat, lng, { collection: 'sentinel-1', days: effectiveRange, preset: 'vh' });
+      const urlS2 = getCopernicusBrowserUrl(lat, lng, { collection: 'sentinel-2-l2a', days: 30, preset: 'true-color' });
+      const urlVVOld = getSentinel1Url(lat, lng, effectiveRange, 'VV', targetDate);
+
+      let statusHtml = '';
+      if (radarAvailability.status === 'loading') {
+        statusHtml = `
+          <div class="flex items-center gap-2 p-2.5 bg-slate-700/50 rounded-lg mb-2">
+            <div class="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin shrink-0"></div>
+            <span class="text-[11px] text-slate-300">กำลังตรวจสอบข้อมูล Sentinel-1...</span>
+          </div>`;
+      } else if (radarAvailability.status === 'found') {
+        statusHtml = `
+          <div class="p-2.5 bg-emerald-900/30 border border-emerald-500/40 rounded-lg mb-2">
+            <div class="flex items-center gap-1.5 mb-1">
+              <span class="text-emerald-400 text-sm">✅</span>
+              <span class="text-[11px] font-bold text-emerald-300">พบข้อมูล Sentinel-1</span>
+            </div>
+            <div class="text-[10px] text-slate-300 leading-relaxed">
+              ภาพล่าสุด: <strong class="text-emerald-200">${formatTH(radarAvailability.date)}</strong>
+              (${daysAgoText(radarAvailability.daysAgo)})<br>
+              พบทั้งหมด ${radarAvailability.count} ภาพ ในช่วง ${radarAvailability.range} วันที่ผ่านมา
+            </div>
+          </div>`;
+      } else if (radarAvailability.status === 'notfound') {
+        statusHtml = `
+          <div class="p-2.5 bg-amber-900/30 border border-amber-500/40 rounded-lg mb-2">
+            <div class="flex items-center gap-1.5 mb-1">
+              <span class="text-amber-400 text-sm">⚠️</span>
+              <span class="text-[11px] font-bold text-amber-300">ไม่พบภาพในช่วง ${radarAvailability.range} วัน</span>
+            </div>
+            <div class="text-[10px] text-slate-300 leading-relaxed">
+              ระบบจะเปิด Copernicus Browser ด้วย <strong>1 ปี</strong> ให้อัตโนมัติ
+            </div>
+          </div>`;
+      } else if (radarAvailability.status === 'error') {
+        statusHtml = `
+          <div class="p-2.5 bg-red-900/30 border border-red-500/40 rounded-lg mb-2">
+            <div class="flex items-center gap-1.5 mb-1">
+              <span class="text-red-400 text-sm">❌</span>
+              <span class="text-[11px] font-bold text-red-300">ตรวจสอบไม่ได้</span>
+            </div>
+            <div class="text-[10px] text-slate-300 leading-relaxed">
+              ${radarAvailability.message}<br>
+              ยังเปิด Copernicus Browser ได้ — ระบบจะใช้ช่วง 1 ปี
+            </div>
+          </div>`;
+      }
+
+      const ranges = [30, 90, 180, 365];
+      const rangeChips = ranges.map(r => `
+        <button data-radar-range="${r}" class="flex-1 text-[11px] py-1.5 rounded-md font-medium ${radarAvailability.range === r ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}">
+          ${r === 365 ? '1 ปี' : r + ' วัน'}
+        </button>
+      `).join('');
+
+      let vvLabel, vhLabel;
+      if (hasData) {
+        vvLabel = `🟡 VV — ${formatTH(radarAvailability.date)} (${daysAgoText(radarAvailability.daysAgo)})`;
+        vhLabel = `🔵 VH — ${formatTH(radarAvailability.date)} (${daysAgoText(radarAvailability.daysAgo)})`;
+      } else if (isNotfoundOrError) {
+        vvLabel = `🟡 เปิด VV (ย้อนหลัง 1 ปี)`;
+        vhLabel = `🔵 เปิด VH (ย้อนหลัง 1 ปี)`;
+      } else {
+        vvLabel = `🟡 เปิด VV (ดูน้ำ/ดิน/ความชื้น)`;
+        vhLabel = `🔵 เปิด VH (ดูพืช/ป่า/การตัดไม้)`;
+      }
+
+      el.innerHTML = `
+        <div class="mb-3 p-3 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+          <div class="text-sm font-semibold text-blue-300 mb-1">🛰 Sentinel-1 (C-band Radar)</div>
+          <div class="text-[11px] text-slate-300 leading-relaxed">
+            คลื่นไมโครเวฟ C-band ทะลุเมฆ/ฝนได้ ~100% ทำงานได้ทั้งกลางวัน-กลางคืน
+          </div>
+        </div>
+
+        <div class="mb-3 p-3 bg-slate-900/60 rounded-lg">
+          <div class="text-[11px] text-slate-400 mb-1">พื้นที่เป้าหมาย:</div>
+          <div class="text-xs text-emerald-300 font-semibold mb-1">${parkLabel}</div>
+          <div class="text-[11px] text-slate-400 font-mono">${lat.toFixed(4)}, ${lng.toFixed(4)}</div>
+        </div>
+
+        <div class="text-xs font-semibold text-slate-300 mb-2">📅 ช่วงเวลาค้นหา</div>
+        <div class="flex gap-1 mb-2">${rangeChips}</div>
+        <button id="checkAvailabilityBtn" class="w-full bg-slate-700 hover:bg-slate-600 active:bg-slate-500 text-white py-2 rounded-lg text-xs font-medium mb-2 ${radarAvailability.status === 'loading' ? 'opacity-50 cursor-wait' : ''}" ${radarAvailability.status === 'loading' ? 'disabled' : ''}>
+          ${radarAvailability.status === 'loading' ? '⏳ กำลังตรวจสอบ...' : '🔍 ตรวจสอบข้อมูล Sentinel-1'}
+        </button>
+
+        ${statusHtml}
+
+        <div class="text-xs font-semibold text-slate-300 mb-2 mt-3">📡 เปิดดูภาพเรดาร์</div>
+        <div class="text-[10px] text-slate-400 mb-2 leading-relaxed">
+          💡 แนะนำ Copernicus Browser (EO Browser เก่าถูกยกเลิกแล้ว)
+        </div>
+
+        <a href="${urlVV}" target="_blank" rel="noopener"
+           class="block w-full bg-amber-600 hover:bg-amber-500 text-white py-3 rounded-lg text-sm font-bold text-center mb-2">
+          🌍 ${vvLabel} (Copernicus) →
+        </a>
+        <a href="${urlVH}" target="_blank" rel="noopener"
+           class="block w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg text-sm font-bold text-center mb-2">
+          🌍 ${vhLabel} (Copernicus) →
+        </a>
+
+        <a href="${urlS2}" target="_blank" rel="noopener"
+           class="block w-full bg-slate-700 hover:bg-slate-600 text-white py-2.5 rounded-lg text-xs font-medium text-center mb-2">
+          ☀️ Sentinel-2 (Copernicus)
+        </a>
+
+        <a href="${urlVVOld}" target="_blank" rel="noopener"
+           class="block w-full bg-slate-800 hover:bg-slate-700 text-slate-400 py-2 rounded-lg text-[10px] text-center mb-3 border border-slate-700">
+          🛰 EO Browser (สำรอง — อาจใช้ไม่ได้)
+        </a>
+
+        <div class="text-xs font-semibold text-slate-300 mb-2">🔬 VV / VH Polarization</div>
+        <div class="space-y-2">
+          <div class="p-2.5 bg-amber-900/20 border border-amber-500/30 rounded-lg">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="px-2 py-0.5 rounded bg-amber-500/30 text-amber-300 text-[10px] font-bold font-mono">VV</span>
+              <span class="text-[10px] text-slate-400">Vertical → Vertical</span>
+            </div>
+            <div class="text-[11px] text-slate-300 leading-relaxed">
+              ไวต่อ <strong class="text-amber-200">ผิวดิน/น้ำ/ความชื้น</strong> — ค่าสะท้อนต่ำ (สีเข้ม) = น้ำ/ดินโล่ง
+            </div>
+          </div>
+          <div class="p-2.5 bg-blue-900/20 border border-blue-500/30 rounded-lg">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="px-2 py-0.5 rounded bg-blue-500/30 text-blue-300 text-[10px] font-bold font-mono">VH</span>
+              <span class="text-[10px] text-slate-400">Vertical → Horizontal</span>
+            </div>
+            <div class="text-[11px] text-slate-300 leading-relaxed">
+              ไวต่อ <strong class="text-blue-200">โครงสร้างพืชพรรณ</strong> — ค่าสูง (สีสว่าง) = ป่า/พืชหนาแน่น
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-3 p-2.5 bg-slate-900/60 rounded-lg text-[10px] text-slate-400 leading-relaxed">
+          💡 <strong>Sentinel-1 Revisit:</strong> ดาวเทียมโคจรซ้ำทุก ~12 วัน —
+          ใน 30 วันมักมีภาพ 2-3 ภาพ หากไม่พบใน 30 วัน ให้เลือก 90/180/365 วัน
+        </div>
+      `;
+
+      document.querySelectorAll('[data-radar-range]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const range = +btn.dataset.radarRange;
+          checkSentinel1Availability(lat, lng, range);
+        });
+      });
+      const checkBtn = document.getElementById('checkAvailabilityBtn');
+      if (checkBtn) {
+        checkBtn.addEventListener('click', () => {
+          checkSentinel1Availability(lat, lng, radarAvailability.range);
+        });
+      }
+    }
+
+    function openRadarModal() {
+      radarAvailability = { status: 'idle', date: null, daysAgo: null, count: 0, message: '', range: 90 };
+      renderRadarContent();
+      radarModal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      const { lat, lng } = currentSettings.center;
+      setTimeout(() => checkSentinel1Availability(lat, lng, 90), 200);
+    }
+    function closeRadarModal() {
+      radarCheckToken++;
+      radarModal.classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+    document.getElementById('btnRadar').addEventListener('click', openRadarModal);
+    document.getElementById('closeRadarBtn').addEventListener('click', closeRadarModal);
+    document.getElementById('radarHomeBtn').addEventListener('click', closeRadarModal);
+    radarModal.addEventListener('click', e => { if (e.target === radarModal) closeRadarModal(); });
+
+    const hotspotModal = document.getElementById('hotspotModal');
+
+    function renderHotspotControls() {
+      const el = document.getElementById('hotspotControls');
+      if (!el) return;
+      const hasKey = !!firmsKey;
+      el.innerHTML = `
+        ${!hasKey ? `
+          <div class="p-3 bg-amber-900/20 border border-amber-500/30 rounded-lg mb-2">
+            <div class="text-xs font-semibold text-amber-300 mb-1">🔑 ต้องใช้ NASA FIRMS MAP_KEY</div>
+            <div class="text-[11px] text-slate-400 leading-relaxed">
+              สมัครฟรี (ใช้เวลาน้อยกว่า 1 นาที) ได้ที่
+              <a href="https://firms.modaps.eosdis.nasa.gov/api/map_key/" target="_blank" rel="noopener" class="text-blue-400 underline">firms.modaps.eosdis.nasa.gov/api/map_key</a>
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="mb-2">
+          <label class="text-[11px] text-slate-400 block mb-1">🔑 MAP_KEY (บันทึกในเครื่อง)</label>
+          <div class="flex gap-2">
+            <input id="firmsKeyInput" type="password" autocomplete="off" value="${firmsKey}" placeholder="วาง MAP_KEY ที่นี่..."
+                   class="flex-1 bg-slate-700 text-white border border-slate-600 rounded-lg px-3 py-2 text-xs font-mono outline-none focus:border-red-500 min-w-0" />
+            <button id="saveFirmsKeyBtn" class="shrink-0 bg-slate-700 hover:bg-slate-600 text-white px-3 py-2 rounded-lg text-xs">💾</button>
+          </div>
+        </div>
+
+        <div class="flex items-center gap-2 mb-2">
+          <label class="text-[11px] text-slate-400 shrink-0">ช่วงวัน:</label>
+          <div class="flex gap-1 flex-1">
+            ${[1, 2, 3].map(d => `
+              <button data-hotspot-days="${d}" class="hotspot-days-btn flex-1 text-xs py-1.5 rounded-md font-medium ${hotspotDays === d ? 'bg-red-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'}">${d} วัน</button>
+            `).join('')}
+          </div>
+        </div>
+
+        <button id="loadHotspotsBtn" class="w-full ${hotspotLoading ? 'bg-slate-600 cursor-wait' : 'bg-red-600 hover:bg-red-500 active:bg-red-400'} text-white py-2.5 rounded-lg text-sm font-bold mb-2" ${!hasKey || hotspotLoading ? 'disabled' : ''}>
+          ${hotspotLoading ? '⏳ กำลังโหลด...' : '🔥 โหลดจุดความร้อน'}
+        </button>
+
+        ${hotspotError ? `
+          <div class="p-2.5 bg-red-900/30 border border-red-500/50 rounded-lg text-[11px] text-red-300 leading-relaxed">
+            ⚠️ ${hotspotError}
+          </div>
+        ` : ''}
+      `;
+      bindHotspotControls();
+    }
+
+    function renderHotspotList() {
+      const el = document.getElementById('hotspotList');
+      if (!el) return;
+      if (hotspotLoading) {
+        el.innerHTML = `<div class="text-center py-4 text-slate-500 text-xs">กำลังโหลดข้อมูล...</div>`;
+        return;
+      }
+      if (hotspots.length === 0) {
+        if (hotspotError) { el.innerHTML = ''; return; }
+        if (!firmsKey) { el.innerHTML = ''; return; }
+        el.innerHTML = `
+          <div class="text-center py-4">
+            <div class="text-2xl mb-1">✅</div>
+            <div class="text-xs text-slate-400">ไม่พบจุดความร้อนในช่วง ${hotspotDays} วันที่ผ่านมา</div>
+          </div>
+        `;
+        return;
+      }
+      el.innerHTML = `
+        <div class="text-xs font-semibold text-slate-300 mb-2">📍 พบ ${hotspots.length} จุด</div>
+        <div class="space-y-1.5 max-h-64 overflow-y-auto">
+          ${hotspots.map(h => {
+            const conf = (h.confidence || '').toString().toLowerCase();
+            const cls = conf.includes('high') ? 'bg-red-500/20 text-red-300'
+                     : conf.includes('low') ? 'bg-emerald-500/20 text-emerald-300'
+                     : 'bg-amber-500/20 text-amber-300';
+            return `<div class="flex items-center justify-between gap-2 p-2 bg-slate-700/50 rounded-lg">
+              <div class="min-w-0">
+                <div class="text-[11px] font-mono text-white truncate">${h.latitude.toFixed(4)}, ${h.longitude.toFixed(4)}</div>
+                <div class="text-[10px] text-slate-400 truncate">${h.acq_date || ''} ${h.acq_time || ''} · ${h.satellite || ''}</div>
+              </div>
+              <span class="shrink-0 px-2 py-0.5 rounded text-[10px] font-semibold ${cls}">${h.confidence || 'nominal'}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      `;
+    }
+
+    function renderHotspotsOnModalMap() {
+      if (!hotspotModalLayerGroup) return;
+      hotspotModalLayerGroup.clearLayers();
+      hotspots.forEach(h => {
+        const conf = (h.confidence || '').toString().toLowerCase();
+        const cls = conf.includes('high') ? 'high'
+                 : conf.includes('low') ? 'low'
+                 : 'nominal';
+        const icon = L.divIcon({
+          className: '',
+          html: `<div class="hotspot-marker ${cls}">🔥</div>`,
+          iconSize: [22, 22],
+          iconAnchor: [11, 11],
+        });
+        const m = L.marker([h.latitude, h.longitude], { icon }).addTo(hotspotModalLayerGroup);
+        m.bindPopup(`<strong>🔥 Hotspot</strong><br>
+          ${h.latitude.toFixed(4)}, ${h.longitude.toFixed(4)}<br>
+          ${h.acq_date || ''} ${h.acq_time || ''}<br>
+          Confidence: ${h.confidence || 'nominal'}<br>
+          Satellite: ${h.satellite || '—'}`);
+      });
+    }
+
+    function initHotspotModalMap() {
+      const el = document.getElementById('hotspotMap');
+      if (!el) return;
+      if (hotspotModalMap) {
+        setTimeout(() => { try { hotspotModalMap.invalidateSize(); } catch(e){} }, 100);
+        return;
+      }
+      try {
+        const c = currentSettings.center;
+        hotspotModalMap = L.map(el, { center: [c.lat, c.lng], zoom: 11, zoomControl: true });
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          { attribution: 'Tiles &copy; Esri', maxZoom: 19 }).addTo(hotspotModalMap);
+        hotspotModalLayerGroup = L.layerGroup().addTo(hotspotModalMap);
+        L.circleMarker([c.lat, c.lng], {
+          radius: 7, color: '#10b981', fillColor: '#10b981',
+          fillOpacity: 0.4, weight: 2
+        }).addTo(hotspotModalMap).bindTooltip('ศูนย์กลางพื้นที่', { direction: 'top' });
+        setTimeout(() => { try { hotspotModalMap.invalidateSize(); } catch(e){} }, 150);
+      } catch (err) {
+        console.error('[HotspotMap]', err);
+      }
+    }
+
+    function destroyHotspotModalMap() {
+      if (hotspotModalMap) {
+        try { hotspotModalMap.remove(); } catch (e) {}
+        hotspotModalMap = null;
+        hotspotModalLayerGroup = null;
+      }
+    }
+
+    async function loadHotspots() {
+      if (!firmsKey) {
+        hotspotError = 'กรุณากรอก NASA FIRMS MAP_KEY ก่อน';
+        renderHotspotControls();
+        return;
+      }
+      hotspotLoading = true;
+      hotspotError = '';
+      renderHotspotControls();
+      renderHotspotList();
+
+      const c = currentSettings.center;
+      const d = 0.5;
+      const bbox = `${(c.lng - d).toFixed(4)},${(c.lat - d).toFixed(4)},${(c.lng + d).toFixed(4)},${(c.lat + d).toFixed(4)}`;
+      try {
+        hotspots = await fetchFirmsAll(bbox, hotspotDays);
+        hotspotLoading = false;
+        renderHotspotControls();
+        renderHotspotList();
+        renderHotspotsOnModalMap();
+        if (hotspotModalMap) {
+          if (hotspots.length > 0) {
+            const bounds = L.latLngBounds(hotspots.map(h => [h.latitude, h.longitude]));
+            bounds.extend([c.lat, c.lng]);
+            hotspotModalMap.fitBounds(bounds.pad(0.2));
+          } else {
+            hotspotModalMap.setView([c.lat, c.lng], 11);
+          }
+        }
+        toast(`โหลด hotspot สำเร็จ (${hotspots.length} จุด)`);
+      } catch (err) {
+        console.error('[FIRMS]', err);
+        hotspotError = `โหลดไม่สำเร็จ: ${err.message}`;
+        hotspotLoading = false;
+        renderHotspotControls();
+        renderHotspotList();
+      }
+    }
+
+    function bindHotspotControls() {
+      const saveBtn = document.getElementById('saveFirmsKeyBtn');
+      if (saveBtn) {
+        saveBtn.addEventListener('click', () => {
+          const input = document.getElementById('firmsKeyInput');
+          if (!input) return;
+          const val = input.value.trim();
+          firmsKey = val;
+          localStorage.setItem(FIRMS_KEY_STORAGE, val);
+          toast(val ? 'บันทึก MAP_KEY แล้ว' : 'ลบ MAP_KEY แล้ว');
+          if (val) autoLoadFire();
+          renderHotspotControls();
+          renderHotspotList();
+        });
+      }
+      document.querySelectorAll('.hotspot-days-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          hotspotDays = +btn.dataset.hotspotDays;
+          renderHotspotControls();
+          renderHotspotList();
+          if (firmsKey) loadHotspots();
+        });
+      });
+      const loadBtn = document.getElementById('loadHotspotsBtn');
+      if (loadBtn) loadBtn.addEventListener('click', () => loadHotspots());
+    }
+
+    function openHotspotModal() {
+      hotspotModal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+      hotspots = [];
+      hotspotError = '';
+      hotspotLoading = false;
+      renderHotspotControls();
+      renderHotspotList();
+      initHotspotModalMap();
+      if (firmsKey) setTimeout(() => loadHotspots(), 300);
+    }
+    function closeHotspotModal() {
+      hotspotModal.classList.add('hidden');
+      document.body.style.overflow = '';
+      destroyHotspotModalMap();
+    }
+
+    document.getElementById('btnHotspot').addEventListener('click', openHotspotModal);
+    document.getElementById('closeHotspotBtn').addEventListener('click', closeHotspotModal);
+    document.getElementById('hotspotHomeBtn').addEventListener('click', closeHotspotModal);
+    hotspotModal.addEventListener('click', e => { if (e.target === hotspotModal) closeHotspotModal(); });
+
+    const MANIFEST = {
+      name: 'ForestWatch - Hybrid Satellite Tracker',
+      short_name: 'ForestWatch',
+      description: 'HLS + VIIRS + Sentinel-1 Radar Compare + Hotspot',
+      lang: 'th', dir: 'ltr', start_url: './', scope: './',
+      display: 'standalone', orientation: 'portrait',
+      background_color: '#0f172a', theme_color: '#064e3b',
+      icons: [{
+        src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' fill='%23064e3b'/%3E%3Cpath d='M256 100C380 160 380 360 256 420 132 360 132 160 256 100Z' fill='%2310b981'/%3E%3C/svg%3E",
+        sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable'
+      }]
+    };
+    document.getElementById('pwaManifest').href =
+      'data:application/manifest+json,' + encodeURIComponent(JSON.stringify(MANIFEST));
+
+    const SW_SOURCE = `const V='v4';const SHELL='fw-shell-'+V;const TILE='fw-tiles-'+V;const GIB='fw-gibs-'+V;const RADAR='fw-radar-'+V;const SHELL_ASSETS=['./','./index.html','./forestwatch.html'];self.addEventListener('install',e=>{e.waitUntil(caches.open(SHELL).then(c=>c.addAll(SHELL_ASSETS).catch(()=>{})).then(()=>self.skipWaiting()));});self.addEventListener('activate',e=>{e.waitUntil(caches.keys().then(ks=>Promise.all(ks.filter(k=>![SHELL,TILE,GIB,RADAR].includes(k)).map(k=>caches.delete(k)))).then(()=>self.clients.claim()));});self.addEventListener('fetch',e=>{const r=e.request;if(r.method!=='GET')return;const u=new URL(r.url);if(/arcgisonline\\.com|tile\\.openstreetmap\\.org/.test(u.hostname)){e.respondWith(caches.open(TILE).then(c=>c.match(r).then(hit=>hit||fetch(r).then(res=>{if(res.ok)c.put(r,res.clone());return res;}).catch(()=>new Response(null,{status:204})))));return;}if(/gibs\\.earthdata\\.nasa\\.gov/.test(u.hostname)){e.respondWith(caches.open(GIB).then(c=>c.match(r).then(hit=>hit||fetch(r).then(res=>{if(res.ok)c.put(r,res.clone());return res;}).catch(()=>new Response(null,{status:204})))));return;}if(/planetarycomputer\\.microsoft\\.com/.test(u.hostname)){e.respondWith(caches.open(RADAR).then(c=>c.match(r).then(hit=>hit||fetch(r).then(res=>{if(res.ok)c.put(r,res.clone());return res;}).catch(()=>new Response(null,{status:204})))));return;}if(r.mode==='navigate'){e.respondWith(fetch(r).then(res=>{const cp=res.clone();caches.open(SHELL).then(c=>c.put(r,cp));return res;}).catch(()=>caches.match(r).then(x=>x||caches.match('./'))));return;}e.respondWith(caches.match(r).then(cached=>{const net=fetch(r).then(res=>{if(res&&res.ok){const cp=res.clone();caches.open(SHELL).then(c=>c.put(r,cp));}return res;}).catch(()=>cached);return cached||net;}));});`;
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', async () => {
+        try {
+          const blob = new Blob([SW_SOURCE], { type: 'application/javascript' });
+          const url = URL.createObjectURL(blob);
+          /* SW จาก blob: URL เบราว์เซอร์ไม่รองรับ — ต้องแยกเป็นไฟล์ sw.js จริงตอน deploy */
+        } catch (_) {}
+      });
+    }
+
+    const pwaModal = document.getElementById('pwaModal');
+    function openPwaModal() { pwaModal.classList.remove('hidden'); document.body.style.overflow='hidden'; }
+    function closePwaModal() { pwaModal.classList.add('hidden'); document.body.style.overflow=''; }
+    document.getElementById('btnPwaSetup').addEventListener('click', openPwaModal);
+    document.getElementById('closePwaBtn').addEventListener('click', closePwaModal);
+    document.getElementById('pwaHomeBtn').addEventListener('click', closePwaModal);
+    pwaModal.addEventListener('click', e => { if (e.target === pwaModal) closePwaModal(); });
+
+    function download(filename, content, mime) {
+      const blob = new Blob([content], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }
+    document.getElementById('dlSw').addEventListener('click', () => {
+      download('sw.js', SW_SOURCE, 'application/javascript');
+      toast('ดาวน์โหลด sw.js แล้ว');
+    });
+    document.getElementById('dlManifest').addEventListener('click', () => {
+      download('manifest.json', JSON.stringify(MANIFEST, null, 2), 'application/json');
+      toast('ดาวน์โหลด manifest.json แล้ว');
+    });
+
+    function init() {
+      if (typeof L === 'undefined') {
+        console.error('[Init] Leaflet not loaded');
+        return;
+      }
+      updateHeader();
+      renderSkeleton();
+      buildMapLayers();
+      setTimeout(() => { renderList(); runAllDetection(); autoLoadFire(); selfTest(); }, LOAD_DELAY);
+    }
+
+    if (typeof L !== 'undefined' && document.readyState !== 'loading') init();
+    else if (typeof L !== 'undefined') document.addEventListener('DOMContentLoaded', init, { once: true });
+    else window.addEventListener('load', init, { once: true });
+  })();
+  </script>
+</body>
+</html>
